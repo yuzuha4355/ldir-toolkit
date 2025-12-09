@@ -1,0 +1,36 @@
+FROM debian:12
+
+# 必要なパッケージをインストール
+RUN apt-get update && apt-get install -y \
+    sudo \
+    systemd \
+    bash \
+    coreutils \
+    findutils \
+    procps \
+    net-tools \
+    iproute2 \
+    iptables \
+    lsof \
+    vim \
+    curl \
+    wget \
+    openssh-server \
+    cron \
+    && rm -rf /var/lib/apt/lists/*
+
+# テスト用のダミーデータ作成
+RUN mkdir -p /var/log && \
+    echo "Debian test log" > /var/log/test.log && \
+    useradd -m -s /bin/bash debianuser && \
+    echo "debianuser:password" | chpasswd
+
+# LDIR-Toolkitをコピー
+COPY ldir-toolkit /opt/ldir-toolkit
+RUN chmod +x /opt/ldir-toolkit/ldir-collect.sh && \
+    chmod +x /opt/ldir-toolkit/modules/*.sh && \
+    chmod +x /opt/ldir-toolkit/lib/*.sh
+
+WORKDIR /opt/ldir-toolkit
+
+CMD ["/bin/bash"]

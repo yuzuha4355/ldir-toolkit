@@ -1,0 +1,37 @@
+FROM almalinux:9
+
+# 必要なパッケージをインストール
+RUN dnf install -y --allowerasing \
+    sudo \
+    systemd \
+    bash \
+    coreutils \
+    findutils \
+    procps-ng \
+    net-tools \
+    iproute \
+    iptables \
+    lsof \
+    vim \
+    curl \
+    wget \
+    openssh-server \
+    cronie \
+    && dnf clean all
+
+# テスト用ログファイル作成
+RUN mkdir -p /var/log && \
+    echo "AlmaLinux 9 test log" > /var/log/test.log
+
+# LDIR-Toolkitをコピー
+COPY ldir-toolkit /opt/ldir-toolkit
+RUN chmod +x /opt/ldir-toolkit/ldir-collect.sh && \
+    chmod +x /opt/ldir-toolkit/modules/*.sh && \
+    chmod +x /opt/ldir-toolkit/lib/*.sh
+
+# 出力ディレクトリ作成
+RUN mkdir -p /output
+
+WORKDIR /opt/ldir-toolkit
+
+CMD ["/bin/bash"]

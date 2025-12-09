@@ -1,0 +1,86 @@
+# LDIR-Toolkit .gitignore
+
+# Collected forensic data (NEVER commit sensitive data!)
+*-forensics_*/
+ldir_output/
+shared-output/
+*.tar.gz
+*.zip
+!ldir-toolkit-*.tar.gz
+!ldir-toolkit-*.zip
+
+# Temporary files
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker volumes and build artifacts
+docker-test/shared-output/
+docker-test/*.zip
+docker-test/*.tar.gz
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS-specific
+Thumbs.db
+Desktop.ini
+
+# Test results
+test-results/
+coverage/
+.coverage
+htmlcov/
+
+# Backup files
+*.bak
+*.backup
+
+# Sensitive data markers (double-check before commit)
+*password*
+*secret*
+*credential*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+
+# Local configuration
+local_config.sh
+.env
+.env.local

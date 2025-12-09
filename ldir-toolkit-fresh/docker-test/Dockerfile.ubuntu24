@@ -1,0 +1,39 @@
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# 必要なパッケージをインストール
+RUN apt-get update && apt-get install -y \
+    sudo \
+    systemd \
+    bash \
+    coreutils \
+    findutils \
+    procps \
+    net-tools \
+    iproute2 \
+    iptables \
+    lsof \
+    vim \
+    curl \
+    wget \
+    openssh-server \
+    cron \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# テスト用ログファイル作成
+RUN mkdir -p /var/log && \
+    echo "Ubuntu 24.04 LTS test log" > /var/log/test.log
+
+# LDIR-Toolkitをコピー
+COPY ldir-toolkit /opt/ldir-toolkit
+RUN chmod +x /opt/ldir-toolkit/ldir-collect.sh && \
+    chmod +x /opt/ldir-toolkit/modules/*.sh && \
+    chmod +x /opt/ldir-toolkit/lib/*.sh
+
+# 出力ディレクトリ作成
+RUN mkdir -p /output
+
+WORKDIR /opt/ldir-toolkit
+
+CMD ["/bin/bash"]

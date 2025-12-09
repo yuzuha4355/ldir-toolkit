@@ -1,0 +1,36 @@
+FROM rockylinux:9
+
+# 必要なパッケージをインストール（CentOSの後継としてRocky Linux使用）
+RUN yum install -y \
+    sudo \
+    systemd \
+    bash \
+    coreutils \
+    findutils \
+    procps-ng \
+    net-tools \
+    iproute \
+    iptables \
+    lsof \
+    vim \
+    curl \
+    wget \
+    openssh-server \
+    cronie \
+    && yum clean all
+
+# テスト用のダミーデータ作成
+RUN mkdir -p /var/log && \
+    echo "Rocky Linux test log" > /var/log/test.log && \
+    useradd -m -s /bin/bash rockyuser && \
+    echo "rockyuser:password" | chpasswd
+
+# LDIR-Toolkitをコピー
+COPY ldir-toolkit /opt/ldir-toolkit
+RUN chmod +x /opt/ldir-toolkit/ldir-collect.sh && \
+    chmod +x /opt/ldir-toolkit/modules/*.sh && \
+    chmod +x /opt/ldir-toolkit/lib/*.sh
+
+WORKDIR /opt/ldir-toolkit
+
+CMD ["/bin/bash"]
