@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -10,7 +10,7 @@ Linux forensic data collection tool for incident response.
 
 ## Overview
 
-LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. Supports 20+ distributions including Ubuntu, Debian, RHEL-based systems, Arch, Alpine, and embedded/cloud environments. Runs offline, requires root, takes 2-5 minutes, outputs ~10GB.
+LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. Supports 20+ distributions including Ubuntu, Debian, RHEL-based systems, Arch, Alpine, and embedded/cloud environments. Runs offline, requires root, typically completes in minutes (depends on system size and LDIR_MODE), outputs can be large.
 
 **Use case**: Incident response, security audits, compliance checks.
 
@@ -28,6 +28,19 @@ LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. S
 ---
 
 ## Quick Start
+
+### Modes
+
+- **fast (default)**: first-response friendly (smaller, safer defaults; web/cloud modules disabled)
+- **full**: exhaustive collection (may be slow & large)
+
+```bash
+# fast (default)
+sudo ./ldir-collect.sh /tmp/ldir_output
+
+# full
+sudo LDIR_MODE=full ./ldir-collect.sh /tmp/ldir_output
+```
 
 ### Installation
 

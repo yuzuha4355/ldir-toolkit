@@ -4,14 +4,27 @@
 # Webブラウザアーティファクト収集モジュール
 #
 
-OUTPUT_DIR="$1"
-WEB_DIR="${OUTPUT_DIR}/web"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [80_web] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
+WEB_DIR="${OUTPUT_DIR}/web"
+ensure_dir "${WEB_DIR}" || { log_error "[80_web] Failed to create ${WEB_DIR}"; exit 1; }
+
 log_info "[80_web] Starting web browser artifacts collection"
+
+# fast mode defaults to disabled (PII/secret-rich)
+if [[ "${LDIR_ENABLE_WEB:-1}" != "1" ]]; then
+    log_info "[80_web] Disabled by LDIR_ENABLE_WEB=${LDIR_ENABLE_WEB}"
+    echo "web module disabled" > "${WEB_DIR}/disabled.txt"
+    exit 0
+fi
 
 for user_home in /root /home/*; do
     if [[ ! -d "$user_home" ]]; then

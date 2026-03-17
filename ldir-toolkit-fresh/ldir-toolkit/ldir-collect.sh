@@ -1,6 +1,6 @@
 #!/bin/bash
 #######################################################################
-# LDIR-Collector v0.2.0 - Enhanced Version
+# LDIR-Collector v0.2.1 - Enhanced Version
 # Linux Digital Incident Response - Collector
 # 
 # カスタマイズ環境・特殊ディストリビューション対応版
@@ -8,32 +8,29 @@
 
 set -euo pipefail
 
+# predictable PATH (cron/sudo/non-interactive safety)
+PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH
+
 # バージョン
-VERSION="0.2.0"
+VERSION="0.2.1"
 
-# カラー定義
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# NOTE:
+# ログ関数や safe_copy 等は lib/common.sh を使用
 
-# ログ関数（基本）
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
+# スクリプトディレクトリ取得（先に確定）
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
+# 共通ライブラリ読み込み（ログ関数のため早めに）
+if [[ -f "${SCRIPT_DIR}/lib/common.sh" ]]; then
+    # OUTPUT_DIR が未設定でも標準出力ログは出る
+    OUTPUT_DIR=""
+    export OUTPUT_DIR
+    source "${SCRIPT_DIR}/lib/common.sh"
+else
+    echo "[ERROR] common.sh not found" >&2
+    exit 1
+fi
 
 # 使い方表示
 usage() {
@@ -72,11 +69,34 @@ EOF
 }
 
 # 引数チェック
-if [ $# -ne 1 ]; then
+if [[ ${#} -ge 1 && ( "$1" = "-h" || "$1" = "--help" ) ]]; then
     usage
 fi
 
-OUTPUT_BASE="$1"
+# output base (default)
+if [[ ${#} -eq 0 ]]; then
+    OUTPUT_BASE="/tmp/ldir_output"
+else
+    OUTPUT_BASE="$1"
+fi
+
+# Mode control (fast forensic vs full)
+# - fast: keep runtime/payload small for first response
+# - full: exhaustive scans (may be slow & large)
+LDIR_MODE="${LDIR_MODE:-fast}"
+export LDIR_MODE
+
+# Feature flags (can be overridden by env)
+# - fast mode defaults to safer/smaller collection
+if [[ "${LDIR_MODE}" = "fast" ]]; then
+    : "${LDIR_ENABLE_WEB:=0}"
+    : "${LDIR_ENABLE_CLOUD_METADATA:=0}"
+else
+    : "${LDIR_ENABLE_WEB:=1}"
+    : "${LDIR_ENABLE_CLOUD_METADATA:=1}"
+fi
+export LDIR_ENABLE_WEB LDIR_ENABLE_CLOUD_METADATA
+
 
 # root権限チェック
 if [ "$EUID" -ne 0 ]; then
@@ -85,6 +105,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # 出力ディレクトリ作成
+umask 077
 HOSTNAME=$(hostname)
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 COLLECTION_DIR="${OUTPUT_BASE}/${HOSTNAME}_${TIMESTAMP}"
@@ -92,19 +113,17 @@ COLLECTION_DIR="${OUTPUT_BASE}/${HOSTNAME}_${TIMESTAMP}"
 mkdir -p "${COLLECTION_DIR}"
 export COLLECTION_DIR
 
+# common.sh のログは OUTPUT_DIR/metadata/collection.log を見に行くので設定
+OUTPUT_DIR="${COLLECTION_DIR}"
+export OUTPUT_DIR
+
+# メタデータディレクトリ作成
+METADATA_DIR="${COLLECTION_DIR}/metadata"
+mkdir -p "${METADATA_DIR}"
+mkdir -p "${METADATA_DIR}/modules"
+
 log_info "LDIR-Collector Version: ${VERSION}"
 log_info "Output directory: ${COLLECTION_DIR}"
-
-# スクリプトディレクトリ取得
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-# ライブラリ読み込み
-if [ -f "${SCRIPT_DIR}/lib/common.sh" ]; then
-    source "${SCRIPT_DIR}/lib/common.sh"
-else
-    log_error "common.sh not found"
-    exit 1
-fi
 
 # 高度な検出ライブラリ読み込み
 if [ -f "${SCRIPT_DIR}/lib/detect_distro_advanced.sh" ]; then
@@ -120,9 +139,7 @@ else
     fi
 fi
 
-# メタデータディレクトリ作成
-METADATA_DIR="${COLLECTION_DIR}/metadata"
-mkdir -p "${METADATA_DIR}"
+# メタデータディレクトリは作成済み
 
 # Manifest作成開始
 MANIFEST="${METADATA_DIR}/manifest.txt"
@@ -175,15 +192,29 @@ for module in "${MODULES[@]}"; do
     if [ -f "${module_path}" ]; then
         log_info "Executing module: ${module}"
         
-        if bash "${module_path}"; then
-            log_success "Module ${module} completed"
-            echo "✓ ${module}" >> "${MANIFEST}"
-            ((SUCCESS_COUNT++))
+        # モジュールログを分離（"成功に見える失敗"を潰す）
+        export LDIR_MODULE="${module}"
+        MODULE_LOG="${METADATA_DIR}/modules/${module}.log"
+        export LDIR_MODULE_LOG="${MODULE_LOG}"
+        : > "${MODULE_LOG}" 2>/dev/null || true
+
+        if bash "${module_path}" "${COLLECTION_DIR}"; then
+            # WARN/ERROR の数も集計（grep はヒット0で exit=1 になるため awk で数える）
+            WARN_COUNT=$(awk '/^\[WARN\]/{c++} END{print c+0}' "${MODULE_LOG}" 2>/dev/null || echo 0)
+            ERROR_COUNT=$(awk '/^\[ERROR\]/{c++} END{print c+0}' "${MODULE_LOG}" 2>/dev/null || echo 0)
+            log_success "Module ${module} completed (warn=${WARN_COUNT}, error=${ERROR_COUNT})"
+            echo "✓ ${module} (warn=${WARN_COUNT}, error=${ERROR_COUNT})" >> "${MANIFEST}"
+            ((SUCCESS_COUNT++)) || true
         else
-            log_error "Module ${module} failed"
-            echo "✗ ${module}" >> "${MANIFEST}"
-            ((FAIL_COUNT++))
+            WARN_COUNT=$(awk '/^\[WARN\]/{c++} END{print c+0}' "${MODULE_LOG}" 2>/dev/null || echo 0)
+            ERROR_COUNT=$(awk '/^\[ERROR\]/{c++} END{print c+0}' "${MODULE_LOG}" 2>/dev/null || echo 0)
+            log_error "Module ${module} failed (warn=${WARN_COUNT}, error=${ERROR_COUNT})"
+            echo "✗ ${module} (warn=${WARN_COUNT}, error=${ERROR_COUNT})" >> "${MANIFEST}"
+            ((FAIL_COUNT++)) || true
         fi
+
+        unset LDIR_MODULE
+        unset LDIR_MODULE_LOG
     else
         log_warn "Module ${module} not found, skipping..."
         echo "- ${module} (not found)" >> "${MANIFEST}"
@@ -207,7 +238,10 @@ EOF
 # SHA256ハッシュ生成
 log_info "Generating SHA256 hashes..."
 HASH_FILE="${METADATA_DIR}/file_hashes.txt"
-find "${COLLECTION_DIR}" -type f ! -path "${HASH_FILE}" -exec sha256sum {} \; > "${HASH_FILE}" 2>/dev/null || true
+HASH_TMP="${HASH_FILE}.tmp"
+: > "${HASH_TMP}" 2>/dev/null || true
+find "${COLLECTION_DIR}" -type f ! -path "${HASH_FILE}" ! -path "${HASH_TMP}" -exec sha256sum {} \; > "${HASH_TMP}" 2>/dev/null || true
+mv -f "${HASH_TMP}" "${HASH_FILE}" 2>/dev/null || true
 
 log_success "Collection complete!"
 log_info "Output: ${COLLECTION_DIR}"
