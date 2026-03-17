@@ -4,12 +4,18 @@
 # ネットワーク情報収集モジュール
 #
 
-OUTPUT_DIR="$1"
-NET_DIR="${OUTPUT_DIR}/network"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [60_network] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+NET_DIR="${OUTPUT_DIR}/network"
+ensure_dir "${NET_DIR}" || { log_error "[60_network] Failed to create ${NET_DIR}"; exit 1; }
 
 log_info "[60_network] Starting network information collection"
 

@@ -4,12 +4,18 @@
 # 永続化機構収集モジュール
 #
 
-OUTPUT_DIR="$1"
-PERSIST_DIR="${OUTPUT_DIR}/persistence"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [40_persistence] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+PERSIST_DIR="${OUTPUT_DIR}/persistence"
+ensure_dir "${PERSIST_DIR}" || { log_error "[40_persistence] Failed to create ${PERSIST_DIR}"; exit 1; }
 
 log_info "[40_persistence] Starting persistence mechanism collection"
 
@@ -26,7 +32,16 @@ if command -v systemctl &> /dev/null; then
     safe_copy "/etc/systemd/system/" "${PERSIST_DIR}/systemd_system/"
     safe_copy "/usr/lib/systemd/system/" "${PERSIST_DIR}/systemd_usr_lib/"
     safe_copy "/lib/systemd/system/" "${PERSIST_DIR}/systemd_lib/"
-    safe_copy "~/.config/systemd/user/" "${PERSIST_DIR}/systemd_user/"
+
+    # ユーザ単位の systemd user units
+    for user_home in /root /home/*; do
+        if [[ -d "$user_home" ]]; then
+            username="$(basename "$user_home")"
+            if [[ -d "${user_home}/.config/systemd/user" ]]; then
+                safe_copy "${user_home}/.config/systemd/user/" "${PERSIST_DIR}/systemd_user_${username}/"
+            fi
+        fi
+    done
 fi
 
 # SysVinit スクリプト

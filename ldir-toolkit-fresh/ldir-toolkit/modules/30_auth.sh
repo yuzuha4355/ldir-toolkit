@@ -4,12 +4,18 @@
 # 認証・ユーザ情報収集モジュール
 #
 
-OUTPUT_DIR="$1"
-AUTH_DIR="${OUTPUT_DIR}/config"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [30_auth] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+AUTH_DIR="${OUTPUT_DIR}/config"
+ensure_dir "${AUTH_DIR}" || { log_error "[30_auth] Failed to create ${AUTH_DIR}"; exit 1; }
 
 log_info "[30_auth] Starting authentication information collection"
 

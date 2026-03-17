@@ -4,12 +4,18 @@
 # システム情報収集モジュール
 #
 
-OUTPUT_DIR="$1"
-SYS_DIR="${OUTPUT_DIR}/system"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [10_system_info] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+SYS_DIR="${OUTPUT_DIR}/system"
+ensure_dir "${SYS_DIR}" || { log_error "[10_system_info] Failed to create ${SYS_DIR}"; exit 1; }
 
 log_info "[10_system_info] Starting system information collection"
 

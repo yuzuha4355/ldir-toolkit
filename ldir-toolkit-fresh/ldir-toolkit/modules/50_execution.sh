@@ -4,12 +4,18 @@
 # 実行履歴収集モジュール
 #
 
-OUTPUT_DIR="$1"
-EXEC_DIR="${OUTPUT_DIR}/execution"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [50_execution] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+EXEC_DIR="${OUTPUT_DIR}/execution"
+ensure_dir "${EXEC_DIR}" || { log_error "[50_execution] Failed to create ${EXEC_DIR}"; exit 1; }
 
 log_info "[50_execution] Starting execution history collection"
 
@@ -36,24 +42,26 @@ for pid_dir in /proc/[0-9]*; do
     if [[ -d "$pid_dir" ]]; then
         pid=$(basename "$pid_dir")
         mkdir -p "${EXEC_DIR}/proc_details/${pid}"
-        
+
         # コマンドライン
         cat "${pid_dir}/cmdline" | tr '\0' ' ' > "${EXEC_DIR}/proc_details/${pid}/cmdline.txt" 2>&1 || true
-        
-        # 環境変数
-        cat "${pid_dir}/environ" | tr '\0' '\n' > "${EXEC_DIR}/proc_details/${pid}/environ.txt" 2>&1 || true
-        
+
         # 実行ファイルパス
         readlink "${pid_dir}/exe" > "${EXEC_DIR}/proc_details/${pid}/exe.txt" 2>&1 || true
-        
+
         # カレントディレクトリ
         readlink "${pid_dir}/cwd" > "${EXEC_DIR}/proc_details/${pid}/cwd.txt" 2>&1 || true
-        
-        # オープンファイル
-        ls -l "${pid_dir}/fd/" > "${EXEC_DIR}/proc_details/${pid}/open_files.txt" 2>&1 || true
-        
+
         # プロセス状態
         cat "${pid_dir}/status" > "${EXEC_DIR}/proc_details/${pid}/status.txt" 2>&1 || true
+
+        if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+            # 環境変数（情報量が多く、PII/secret が混入しやすい）
+            cat "${pid_dir}/environ" | tr '\0' '\n' > "${EXEC_DIR}/proc_details/${pid}/environ.txt" 2>&1 || true
+
+            # オープンファイル（重い）
+            ls -l "${pid_dir}/fd/" > "${EXEC_DIR}/proc_details/${pid}/open_files.txt" 2>&1 || true
+        fi
     fi
 done
 

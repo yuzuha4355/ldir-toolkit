@@ -4,12 +4,18 @@
 # ログファイル収集モジュール
 #
 
-OUTPUT_DIR="$1"
-LOG_DIR="${OUTPUT_DIR}/logs"
+OUTPUT_DIR="${1:-}"
+if [[ -z "${OUTPUT_DIR}" ]]; then
+    echo "[ERROR] [20_logs] Missing output directory argument" >&2
+    exit 1
+fi
 
 # 共通関数を読み込み
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+
+LOG_DIR="${OUTPUT_DIR}/logs"
+ensure_dir "${LOG_DIR}" || { log_error "[20_logs] Failed to create ${LOG_DIR}"; exit 1; }
 
 log_info "[20_logs] Starting log collection"
 

@@ -2,74 +2,144 @@
 #######################################################################
 # Module: Cloud Metadata Collection
 # クラウド環境メタデータ収集（AWS/Azure/GCP/Oracle Cloud等）
+#
+# v0.2.1 hardening:
+# - Common interface: $1 = COLLECTION_DIR
+# - Source common.sh
+# - AWS IMDSv2 token support (best-effort)
+# - Optional disable via LDIR_ENABLE_CLOUD_METADATA=0 (default: 1)
 #######################################################################
 
+set -u
+
+COLLECTION_DIR="${1:-}"
+if [[ -z "${COLLECTION_DIR}" ]]; then
+    echo "[ERROR] [cloud_metadata] Missing output directory argument" >&2
+    exit 1
+fi
+
+# Feature flag (safety for environments where network access should be avoided)
+LDIR_ENABLE_CLOUD_METADATA="${LDIR_ENABLE_CLOUD_METADATA:-1}"
+
+# 共通関数を読み込み
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUTPUT_DIR="${COLLECTION_DIR}"
+export OUTPUT_DIR
+source "${SCRIPT_DIR}/lib/common.sh"
+
 MODULE_NAME="cloud_metadata"
-OUTPUT_DIR="${COLLECTION_DIR}/${MODULE_NAME}"
-mkdir -p "${OUTPUT_DIR}"
+MOD_DIR="${COLLECTION_DIR}/${MODULE_NAME}"
+ensure_dir "${MOD_DIR}" || { log_error "[${MODULE_NAME}] Failed to create ${MOD_DIR}"; exit 1; }
+
+if [[ "${LDIR_ENABLE_CLOUD_METADATA}" != "1" ]]; then
+    log_info "[${MODULE_NAME}] Disabled by LDIR_ENABLE_CLOUD_METADATA=${LDIR_ENABLE_CLOUD_METADATA}"
+    echo "cloud_metadata disabled" > "${MOD_DIR}/disabled.txt"
+    exit 0
+fi
 
 log_info "[${MODULE_NAME}] Starting cloud metadata collection..."
 
 # タイムアウト設定（クラウドでない場合の待機を短縮）
-TIMEOUT=2
+TIMEOUT="${LDIR_CLOUD_METADATA_TIMEOUT:-2}"
+
+have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+curl_get() {
+    local url="$1"
+    shift || true
+    # shellcheck disable=SC2068
+    curl -sf --max-time "${TIMEOUT}" "$@" "$url"
+}
+
+# --- AWS IMDS helpers (IMDSv2 best-effort) ---
+aws_get_token() {
+    # token TTL 60s (short-lived)
+    curl -sf --max-time "${TIMEOUT}" -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true
+}
+
+aws_curl_get() {
+    local path="$1"  # e.g. instance-id
+    local token="${2:-}"
+
+    local base="http://169.254.169.254/latest/meta-data/"
+    if [[ -n "$token" ]]; then
+        curl_get "${base}${path}" -H "X-aws-ec2-metadata-token: ${token}" 2>/dev/null
+    else
+        curl_get "${base}${path}" 2>/dev/null
+    fi
+}
+
+aws_curl_user_data() {
+    local token="${1:-}"
+    local url="http://169.254.169.254/latest/user-data"
+    if [[ -n "$token" ]]; then
+        curl_get "$url" -H "X-aws-ec2-metadata-token: ${token}" 2>/dev/null
+    else
+        curl_get "$url" 2>/dev/null
+    fi
+}
 
 # 1. AWS EC2 メタデータ
 check_aws() {
     log_info "[${MODULE_NAME}] Checking for AWS EC2..."
-    
-    AWS_METADATA_URL="http://169.254.169.254/latest/meta-data/"
-    
-    if curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/aws"
-        log_info "[${MODULE_NAME}] AWS EC2 detected"
-        
-        # 基本情報
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}instance-id" > "${OUTPUT_DIR}/aws/instance-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}instance-type" > "${OUTPUT_DIR}/aws/instance-type.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}ami-id" > "${OUTPUT_DIR}/aws/ami-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}hostname" > "${OUTPUT_DIR}/aws/hostname.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}local-ipv4" > "${OUTPUT_DIR}/aws/local-ipv4.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}public-ipv4" > "${OUTPUT_DIR}/aws/public-ipv4.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}placement/availability-zone" > "${OUTPUT_DIR}/aws/availability-zone.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}placement/region" > "${OUTPUT_DIR}/aws/region.txt" 2>/dev/null
-        
-        # セキュリティグループ
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}security-groups" > "${OUTPUT_DIR}/aws/security-groups.txt" 2>/dev/null
-        
-        # IAMロール
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}iam/security-credentials/" > "${OUTPUT_DIR}/aws/iam-role.txt" 2>/dev/null
-        
-        # ユーザーデータ
-        curl -sf --max-time ${TIMEOUT} "http://169.254.169.254/latest/user-data" > "${OUTPUT_DIR}/aws/user-data.txt" 2>/dev/null
-        
-        # ネットワークインターフェース
-        curl -sf --max-time ${TIMEOUT} "${AWS_METADATA_URL}network/interfaces/macs/" > "${OUTPUT_DIR}/aws/network-macs.txt" 2>/dev/null
-        
-        log_success "[${MODULE_NAME}] AWS metadata collected"
-        return 0
+
+    if ! have_cmd curl; then
+        log_warn "[${MODULE_NAME}] curl not found; skipping cloud metadata"
+        return 1
     fi
-    return 1
+
+    local token
+    token="$(aws_get_token)"
+
+    # Detection: try meta-data root (token first, then no-token)
+    if [[ -n "$token" ]]; then
+        curl_get "http://169.254.169.254/latest/meta-data/" -H "X-aws-ec2-metadata-token: ${token}" &>/dev/null || true
+    fi
+
+    if ! curl_get "http://169.254.169.254/latest/meta-data/" -H "X-aws-ec2-metadata-token: ${token}" &>/dev/null; then
+        # fallback to IMDSv1
+        token=""
+        curl_get "http://169.254.169.254/latest/meta-data/" &>/dev/null || return 1
+    fi
+
+    ensure_dir "${MOD_DIR}/aws"
+    log_info "[${MODULE_NAME}] AWS EC2 detected"
+
+    aws_curl_get "instance-id" "$token" > "${MOD_DIR}/aws/instance-id.txt" 2>/dev/null || true
+    aws_curl_get "instance-type" "$token" > "${MOD_DIR}/aws/instance-type.txt" 2>/dev/null || true
+    aws_curl_get "ami-id" "$token" > "${MOD_DIR}/aws/ami-id.txt" 2>/dev/null || true
+    aws_curl_get "hostname" "$token" > "${MOD_DIR}/aws/hostname.txt" 2>/dev/null || true
+    aws_curl_get "local-ipv4" "$token" > "${MOD_DIR}/aws/local-ipv4.txt" 2>/dev/null || true
+    aws_curl_get "public-ipv4" "$token" > "${MOD_DIR}/aws/public-ipv4.txt" 2>/dev/null || true
+    aws_curl_get "placement/availability-zone" "$token" > "${MOD_DIR}/aws/availability-zone.txt" 2>/dev/null || true
+
+    # region endpoint differs by generation; keep best-effort
+    aws_curl_get "placement/region" "$token" > "${MOD_DIR}/aws/region.txt" 2>/dev/null || true
+
+    aws_curl_get "security-groups" "$token" > "${MOD_DIR}/aws/security-groups.txt" 2>/dev/null || true
+    aws_curl_get "iam/security-credentials/" "$token" > "${MOD_DIR}/aws/iam-role.txt" 2>/dev/null || true
+
+    aws_curl_user_data "$token" > "${MOD_DIR}/aws/user-data.txt" 2>/dev/null || true
+    aws_curl_get "network/interfaces/macs/" "$token" > "${MOD_DIR}/aws/network-macs.txt" 2>/dev/null || true
+
+    log_success "[${MODULE_NAME}] AWS metadata collected"
+    return 0
 }
 
 # 2. Azure メタデータ
 check_azure() {
     log_info "[${MODULE_NAME}] Checking for Azure..."
-    
-    AZURE_METADATA_URL="http://169.254.169.254/metadata/instance?api-version=2021-02-01"
-    
-    if curl -sf --max-time ${TIMEOUT} -H "Metadata:true" "${AZURE_METADATA_URL}" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/azure"
+
+    local url="http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+    if curl_get "$url" -H "Metadata:true" &>/dev/null; then
+        ensure_dir "${MOD_DIR}/azure"
         log_info "[${MODULE_NAME}] Azure detected"
-        
-        # インスタンスメタデータ（JSON形式）
-        curl -sf --max-time ${TIMEOUT} -H "Metadata:true" "${AZURE_METADATA_URL}" > "${OUTPUT_DIR}/azure/instance-metadata.json" 2>/dev/null
-        
-        # アテステーション情報
-        curl -sf --max-time ${TIMEOUT} -H "Metadata:true" "http://169.254.169.254/metadata/attested/document?api-version=2021-02-01" > "${OUTPUT_DIR}/azure/attested-data.json" 2>/dev/null
-        
-        # スケジュールイベント
-        curl -sf --max-time ${TIMEOUT} -H "Metadata:true" "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01" > "${OUTPUT_DIR}/azure/scheduled-events.json" 2>/dev/null
-        
+
+        curl_get "$url" -H "Metadata:true" > "${MOD_DIR}/azure/instance-metadata.json" 2>/dev/null || true
+        curl_get "http://169.254.169.254/metadata/attested/document?api-version=2021-02-01" -H "Metadata:true" > "${MOD_DIR}/azure/attested-data.json" 2>/dev/null || true
+        curl_get "http://169.254.169.254/metadata/scheduledevents?api-version=2020-07-01" -H "Metadata:true" > "${MOD_DIR}/azure/scheduled-events.json" 2>/dev/null || true
+
         log_success "[${MODULE_NAME}] Azure metadata collected"
         return 0
     fi
@@ -79,29 +149,21 @@ check_azure() {
 # 3. Google Cloud Platform メタデータ
 check_gcp() {
     log_info "[${MODULE_NAME}] Checking for GCP..."
-    
-    GCP_METADATA_URL="http://metadata.google.internal/computeMetadata/v1/"
-    
-    if curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/gcp"
+
+    local base="http://metadata.google.internal/computeMetadata/v1/"
+    if curl_get "$base" -H "Metadata-Flavor: Google" &>/dev/null; then
+        ensure_dir "${MOD_DIR}/gcp"
         log_info "[${MODULE_NAME}] GCP detected"
-        
-        # インスタンス情報
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/?recursive=true" > "${OUTPUT_DIR}/gcp/instance-metadata.json" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/id" > "${OUTPUT_DIR}/gcp/instance-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/name" > "${OUTPUT_DIR}/gcp/instance-name.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/zone" > "${OUTPUT_DIR}/gcp/zone.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/machine-type" > "${OUTPUT_DIR}/gcp/machine-type.txt" 2>/dev/null
-        
-        # ネットワーク情報
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/network-interfaces/" > "${OUTPUT_DIR}/gcp/network-interfaces.txt" 2>/dev/null
-        
-        # サービスアカウント
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}instance/service-accounts/" > "${OUTPUT_DIR}/gcp/service-accounts.txt" 2>/dev/null
-        
-        # プロジェクト情報
-        curl -sf --max-time ${TIMEOUT} -H "Metadata-Flavor: Google" "${GCP_METADATA_URL}project/?recursive=true" > "${OUTPUT_DIR}/gcp/project-metadata.json" 2>/dev/null
-        
+
+        curl_get "${base}instance/?recursive=true" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/instance-metadata.json" 2>/dev/null || true
+        curl_get "${base}instance/id" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/instance-id.txt" 2>/dev/null || true
+        curl_get "${base}instance/name" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/instance-name.txt" 2>/dev/null || true
+        curl_get "${base}instance/zone" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/zone.txt" 2>/dev/null || true
+        curl_get "${base}instance/machine-type" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/machine-type.txt" 2>/dev/null || true
+        curl_get "${base}instance/network-interfaces/" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/network-interfaces.txt" 2>/dev/null || true
+        curl_get "${base}instance/service-accounts/" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/service-accounts.txt" 2>/dev/null || true
+        curl_get "${base}project/?recursive=true" -H "Metadata-Flavor: Google" > "${MOD_DIR}/gcp/project-metadata.json" 2>/dev/null || true
+
         log_success "[${MODULE_NAME}] GCP metadata collected"
         return 0
     fi
@@ -111,22 +173,18 @@ check_gcp() {
 # 4. Oracle Cloud Infrastructure メタデータ
 check_oci() {
     log_info "[${MODULE_NAME}] Checking for Oracle Cloud..."
-    
-    OCI_METADATA_URL="http://169.254.169.254/opc/v1/"
-    
-    if curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}instance/" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/oci"
+
+    local base="http://169.254.169.254/opc/v1/"
+    if curl_get "${base}instance/" &>/dev/null; then
+        ensure_dir "${MOD_DIR}/oci"
         log_info "[${MODULE_NAME}] Oracle Cloud detected"
-        
-        # インスタンス情報
-        curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}instance/" > "${OUTPUT_DIR}/oci/instance-metadata.json" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}instance/id" > "${OUTPUT_DIR}/oci/instance-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}instance/region" > "${OUTPUT_DIR}/oci/region.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}instance/shape" > "${OUTPUT_DIR}/oci/shape.txt" 2>/dev/null
-        
-        # VNIC情報
-        curl -sf --max-time ${TIMEOUT} "${OCI_METADATA_URL}vnics/" > "${OUTPUT_DIR}/oci/vnics.json" 2>/dev/null
-        
+
+        curl_get "${base}instance/" > "${MOD_DIR}/oci/instance-metadata.json" 2>/dev/null || true
+        curl_get "${base}instance/id" > "${MOD_DIR}/oci/instance-id.txt" 2>/dev/null || true
+        curl_get "${base}instance/region" > "${MOD_DIR}/oci/region.txt" 2>/dev/null || true
+        curl_get "${base}instance/shape" > "${MOD_DIR}/oci/shape.txt" 2>/dev/null || true
+        curl_get "${base}vnics/" > "${MOD_DIR}/oci/vnics.json" 2>/dev/null || true
+
         log_success "[${MODULE_NAME}] Oracle Cloud metadata collected"
         return 0
     fi
@@ -136,19 +194,18 @@ check_oci() {
 # 5. DigitalOcean メタデータ
 check_digitalocean() {
     log_info "[${MODULE_NAME}] Checking for DigitalOcean..."
-    
-    DO_METADATA_URL="http://169.254.169.254/metadata/v1/"
-    
-    if curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/digitalocean"
+
+    local base="http://169.254.169.254/metadata/v1/"
+    if curl_get "$base" &>/dev/null; then
+        ensure_dir "${MOD_DIR}/digitalocean"
         log_info "[${MODULE_NAME}] DigitalOcean detected"
-        
-        curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}id" > "${OUTPUT_DIR}/digitalocean/droplet-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}hostname" > "${OUTPUT_DIR}/digitalocean/hostname.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}region" > "${OUTPUT_DIR}/digitalocean/region.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}interfaces/" > "${OUTPUT_DIR}/digitalocean/interfaces.json" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${DO_METADATA_URL}tags" > "${OUTPUT_DIR}/digitalocean/tags.txt" 2>/dev/null
-        
+
+        curl_get "${base}id" > "${MOD_DIR}/digitalocean/droplet-id.txt" 2>/dev/null || true
+        curl_get "${base}hostname" > "${MOD_DIR}/digitalocean/hostname.txt" 2>/dev/null || true
+        curl_get "${base}region" > "${MOD_DIR}/digitalocean/region.txt" 2>/dev/null || true
+        curl_get "${base}interfaces/" > "${MOD_DIR}/digitalocean/interfaces.json" 2>/dev/null || true
+        curl_get "${base}tags" > "${MOD_DIR}/digitalocean/tags.txt" 2>/dev/null || true
+
         log_success "[${MODULE_NAME}] DigitalOcean metadata collected"
         return 0
     fi
@@ -158,21 +215,20 @@ check_digitalocean() {
 # 6. Alibaba Cloud メタデータ
 check_alibaba() {
     log_info "[${MODULE_NAME}] Checking for Alibaba Cloud..."
-    
-    ALIBABA_METADATA_URL="http://100.100.100.200/latest/meta-data/"
-    
-    if curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}" &>/dev/null; then
-        mkdir -p "${OUTPUT_DIR}/alibaba"
+
+    local base="http://100.100.100.200/latest/meta-data/"
+    if curl_get "$base" &>/dev/null; then
+        ensure_dir "${MOD_DIR}/alibaba"
         log_info "[${MODULE_NAME}] Alibaba Cloud detected"
-        
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}instance-id" > "${OUTPUT_DIR}/alibaba/instance-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}instance-type" > "${OUTPUT_DIR}/alibaba/instance-type.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}region-id" > "${OUTPUT_DIR}/alibaba/region-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}zone-id" > "${OUTPUT_DIR}/alibaba/zone-id.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}private-ipv4" > "${OUTPUT_DIR}/alibaba/private-ipv4.txt" 2>/dev/null
-        curl -sf --max-time ${TIMEOUT} "${ALIBABA_METADATA_URL}eipv4" > "${OUTPUT_DIR}/alibaba/public-ipv4.txt" 2>/dev/null
-        
-        log_success "[${MODULE_NAME}] Alibaba Cloud metadata collected"
+
+        curl_get "${base}instance-id" > "${MOD_DIR}/alibaba/instance-id.txt" 2>/dev/null || true
+        curl_get "${base}instance-type" > "${MOD_DIR}/alibaba/instance-type.txt" 2>/dev/null || true
+        curl_get "${base}region-id" > "${MOD_DIR}/alibaba/region-id.txt" 2>/dev/null || true
+        curl_get "${base}zone-id" > "${MOD_DIR}/alibaba/zone-id.txt" 2>/dev/null || true
+        curl_get "${base}private-ipv4" > "${MOD_DIR}/alibaba/private-ipv4.txt" 2>/dev/null || true
+        curl_get "${base}eipv4" > "${MOD_DIR}/alibaba/public-ipv4.txt" 2>/dev/null || true
+
+        log_success "[${MODULE_NAME}] Alibaba metadata collected"
         return 0
     fi
     return 1
@@ -188,9 +244,10 @@ check_oci && CLOUD_DETECTED=1
 check_digitalocean && CLOUD_DETECTED=1
 check_alibaba && CLOUD_DETECTED=1
 
-if [ ${CLOUD_DETECTED} -eq 0 ]; then
+if [[ ${CLOUD_DETECTED} -eq 0 ]]; then
     log_info "[${MODULE_NAME}] No cloud environment detected (on-premises or unsupported cloud)"
-    echo "No cloud environment detected" > "${OUTPUT_DIR}/no_cloud.txt"
+    echo "No cloud environment detected" > "${MOD_DIR}/no_cloud.txt"
 fi
 
 log_success "[${MODULE_NAME}] Cloud metadata collection complete"
+exit 0
