@@ -136,7 +136,7 @@ if [[ "${CONTAINER_TYPE:-none}" != "none" ]]; then
     safe_copy "/proc/1/mountinfo" "${MOD_DIR}/container/mountinfo.txt"
 
     if [[ "${CONTAINER_TYPE}" = "docker" ]]; then
-        safe_copy "/.dockerenv" "${MOD_DIR}/container/dockerenv"
+        safe_copy "/.dockerenv" "${MOD_DIR}/container/dockerenv" || true
         save_command_output "cat /proc/1/environ | tr '\\0' '\\n'" "${MOD_DIR}/container/docker_env.txt" || true
     fi
 fi
@@ -194,16 +194,30 @@ CUSTOM_CONFIGS=(
 for pattern in "${CUSTOM_CONFIGS[@]}"; do
     for path in ${pattern}; do
         if [[ -e "$path" ]]; then
-            safe_copy "$path" "${MOD_DIR}/custom_configs/$(basename "$path")"
+            # /opt/a/conf と /opt/b/conf が衝突しないよう、パス全体から名前を作る
+            # 例: /opt/a/conf -> opt_a_conf
+            flat="${path#/}"
+            if [[ -d "$path" ]]; then
+                safe_copy "${path%/}/" "${MOD_DIR}/custom_configs/${flat//\//_}/"
+            else
+                safe_copy "$path" "${MOD_DIR}/custom_configs/${flat//\//_}"
+            fi
         fi
     done
 done
 
-# ユーザの ~/.config は ~ を使わず確実に回収
+# ユーザの ~/.config
+# ブラウザや Electron アプリのプロファイルを含み GB 単位になり得るうえ、
+# Cookie 等も入る（LDIR_ENABLE_WEB=0 の意図と矛盾する）。
+# - fast: 一覧だけ記録
+# - full: 丸ごと回収
 for user_home in /root /home/*; do
     if [[ -d "$user_home/.config" ]]; then
         username="$(basename "$user_home")"
-        safe_copy "$user_home/.config" "${MOD_DIR}/custom_configs/user_config_${username}"
+        find "$user_home/.config" -maxdepth 3 -ls > "${MOD_DIR}/custom_configs/user_config_${username}_listing.txt" 2>/dev/null || true
+        if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+            safe_copy "$user_home/.config" "${MOD_DIR}/custom_configs/user_config_${username}"
+        fi
     fi
 done
 

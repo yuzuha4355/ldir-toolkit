@@ -33,48 +33,48 @@ lsblk -f > "${FS_DIR}/block_devices_filesystems.txt" 2>&1 || true
 # 最近変更されたファイル
 log_info "Finding recently modified files"
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / -type f -mtime -7 -ls > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || log_warn "Find command failed (expected on some systems)"
+    find / "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 -ls > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || log_debug "find reported errors while scanning / (expected for /proc etc.)"
 else
     # fast mode: limit to high-signal paths to avoid long scans
     {
         for p in /etc /var/log /var/spool /root /home /tmp /var/tmp; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev -type f -mtime -7 -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 -ls 2>/dev/null
         done
     } > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || true
 fi
 
-find /tmp -type f -ls > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
-find /var/tmp -type f -ls > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
+find /tmp "${LDIR_FIND_PRUNE[@]}" -type f -ls > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
+find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f -ls > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
 
 # SUID/SGID ファイル（権限昇格に悪用される可能性）
 log_info "Finding SUID/SGID files"
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / -type f \( -perm -4000 -o -perm -2000 \) -ls > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_warn "SUID/SGID search failed"
+    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) -ls > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_debug "find reported errors during SUID/SGID search"
 
     # ワールドライタブルファイル（脆弱性の可能性）
     log_info "Finding world-writable files"
-    find / -type f -perm -0002 -ls > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+    find / "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 -ls > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
 else
     # fast mode: focus on common abuse paths
     {
         for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null
         done
     } > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || true
 
     {
         for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev -type f -perm -0002 -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 -ls 2>/dev/null
         done
     } > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
 fi
 
 # 隠しファイル（ドットファイル）
 log_info "Finding hidden files in sensitive directories"
-find /tmp /var/tmp /dev/shm -name ".*" -ls > "${FS_DIR}/hidden_files_sensitive.txt" 2>/dev/null || true
+find /tmp /var/tmp /dev/shm "${LDIR_FIND_PRUNE[@]}" -name ".*" -ls > "${FS_DIR}/hidden_files_sensitive.txt" 2>/dev/null || true
 
 # /dev/shm の内容（メモリベースのファイル、マルウェアが使用することがある）
 ls -laR /dev/shm > "${FS_DIR}/dev_shm_contents.txt" 2>&1 || true
@@ -94,24 +94,47 @@ log_info "Finding deleted but open files"
 lsof +L1 > "${FS_DIR}/deleted_open_files.txt" 2>&1 || true
 
 # パッケージマネージャでインストールされていないバイナリ
+# 1 ファイルごとに dpkg -S / rpm -qf を呼ぶと数千回の起動で分単位かかるため、
+# 「パッケージ所有ファイルの一覧」を一度だけ作り、実ファイル一覧と突き合わせる。
 log_info "Finding unpackaged files in system directories"
-# このチェックは時間がかかるため、主要なディレクトリのみ
-if command -v dpkg &> /dev/null; then
-    # Debian系: dpkg -S でパッケージに属さないファイルを探す
-    for file in /usr/bin/* /usr/sbin/*; do
-        if [[ -f "$file" ]]; then
-            dpkg -S "$file" &>/dev/null || echo "$file" >> "${FS_DIR}/unpackaged_binaries_dpkg.txt"
-        fi
-    done 2>/dev/null || true
+
+list_system_binaries() {
+    local d f
+    for d in /usr/bin /usr/sbin /usr/local/bin /usr/local/sbin; do
+        [[ -d "$d" ]] || continue
+        for f in "$d"/*; do
+            [[ -f "$f" || -L "$f" ]] && echo "$f"
+        done
+    done | LC_ALL=C sort -u
+}
+
+# 所有ファイル一覧を正規化する: usrmerge 環境では /bin/ls として登録された
+# ファイルが /usr/bin/ls に実在するため、/bin,/sbin,/lib* を /usr 配下にも展開する。
+normalize_owned_list() {
+    awk '{ print } /^\/(bin|sbin|lib|lib32|lib64|libx32)\// { print "/usr" $0 }' | LC_ALL=C sort -u
+}
+
+find_unpackaged() {
+    local owned_cmd="$1" out="$2"
+    local owned_tmp="${out}.owned.tmp" present_tmp="${out}.present.tmp"
+    if eval "$owned_cmd" 2>/dev/null | normalize_owned_list > "$owned_tmp" && [[ -s "$owned_tmp" ]]; then
+        list_system_binaries > "$present_tmp"
+        LC_ALL=C comm -23 "$present_tmp" "$owned_tmp" > "$out"
+    else
+        log_warn "Could not build package file list for unpackaged-binary check: ${out##*/}"
+    fi
+    rm -f "$owned_tmp" "$present_tmp"
+}
+
+if have_cmd dpkg && compgen -G "/var/lib/dpkg/info/*.list" > /dev/null; then
+    # Debian系。dpkg-divert / update-alternatives 由来のリンクは一覧に載らないため、
+    # 結果は「要確認の候補」であり、即不審という意味ではない。
+    find_unpackaged "cat /var/lib/dpkg/info/*.list" "${FS_DIR}/unpackaged_binaries_dpkg.txt"
 fi
 
-if command -v rpm &> /dev/null; then
-    # RedHat系: rpm -qf でパッケージに属さないファイルを探す
-    for file in /usr/bin/* /usr/sbin/*; do
-        if [[ -f "$file" ]]; then
-            rpm -qf "$file" &>/dev/null || echo "$file" >> "${FS_DIR}/unpackaged_binaries_rpm.txt"
-        fi
-    done 2>/dev/null || true
+if have_cmd rpm && rpm -qa >/dev/null 2>&1 && [[ -n "$(rpm -qa 2>/dev/null | head -1)" ]]; then
+    # RedHat系
+    find_unpackaged "rpm -qal" "${FS_DIR}/unpackaged_binaries_rpm.txt"
 fi
 
 # /etc の内容リスト（設定ファイル全体像）

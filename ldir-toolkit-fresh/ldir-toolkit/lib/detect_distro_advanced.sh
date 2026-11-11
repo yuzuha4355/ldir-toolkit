@@ -36,7 +36,7 @@ detect_init_system() {
         INIT_SYSTEM="runit"
     elif [ -d /etc/s6 ]; then
         INIT_SYSTEM="s6"
-    elif [ -f /sbin/init ] && strings /sbin/init | grep -q "upstart"; then
+    elif [ -f /sbin/init ] && grep -aq "upstart" /sbin/init 2>/dev/null; then
         INIT_SYSTEM="upstart"
     elif [ -f /etc/inittab ]; then
         INIT_SYSTEM="sysvinit"
@@ -46,24 +46,44 @@ detect_init_system() {
     export INIT_SYSTEM
 }
 
+# os-release 形式のファイルから 1 項目だけ読む。
+# サブシェル内で source するので、呼び出し元の変数（VERSION, NAME, ID 等）を
+# 上書きしない。項目が無ければ空文字を返す（set -u でも安全）。
+_ldir_release_get() {
+    local file="$1" key="$2"
+    [ -r "$file" ] || return 0
+    (
+        set +u
+        # shellcheck disable=SC1090
+        . "$file" >/dev/null 2>&1
+        eval "printf '%s' \"\${${key}:-}\""
+    )
+}
+
 # ディストリビューション詳細検出
+# LDIR_OS_RELEASE でファイルを差し替え可能（テスト用）
 detect_distribution_advanced() {
-    # 標準的な検出
-    if [ -f /etc/os-release ]; then
-        . /etc/os-release
-        DISTRO_NAME="$NAME"
-        DISTRO_VERSION="$VERSION_ID"
-        DISTRO_ID="$ID"
+    local os_release="${LDIR_OS_RELEASE:-/etc/os-release}"
+
+    DISTRO_NAME=""
+    DISTRO_VERSION=""
+    DISTRO_ID=""
+
+    if [ -f "$os_release" ]; then
+        DISTRO_NAME="$(_ldir_release_get "$os_release" NAME)"
+        # Arch / Debian testing などは VERSION_ID を持たない
+        DISTRO_VERSION="$(_ldir_release_get "$os_release" VERSION_ID)"
+        [ -n "$DISTRO_VERSION" ] || DISTRO_VERSION="$(_ldir_release_get "$os_release" BUILD_ID)"
+        DISTRO_ID="$(_ldir_release_get "$os_release" ID)"
     elif [ -f /etc/lsb-release ]; then
-        . /etc/lsb-release
-        DISTRO_NAME="$DISTRIB_DESCRIPTION"
-        DISTRO_VERSION="$DISTRIB_RELEASE"
-        DISTRO_ID="$DISTRIB_ID"
-    else
-        DISTRO_NAME="Unknown"
-        DISTRO_VERSION="Unknown"
-        DISTRO_ID="unknown"
+        DISTRO_NAME="$(_ldir_release_get /etc/lsb-release DISTRIB_DESCRIPTION)"
+        DISTRO_VERSION="$(_ldir_release_get /etc/lsb-release DISTRIB_RELEASE)"
+        DISTRO_ID="$(_ldir_release_get /etc/lsb-release DISTRIB_ID)"
     fi
+
+    : "${DISTRO_NAME:=Unknown}"
+    : "${DISTRO_VERSION:=Unknown}"
+    : "${DISTRO_ID:=unknown}"
 
     # 特殊ディストリビューションの追加検出
     if [ -f /etc/arch-release ]; then
@@ -200,7 +220,9 @@ detect_all() {
     log_info "Log Directory: ${LOG_DIR}"
 }
 
-# メイン実行
+# メイン実行（単体で実行された場合。通常は ldir-collect.sh から source される）
 if [ "${BASH_SOURCE[0]}" == "${0}" ]; then
+    # shellcheck source=common.sh
+    source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
     detect_all
 fi

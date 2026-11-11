@@ -39,6 +39,10 @@ safe_copy "/etc/security/" "${AUTH_DIR}/security/"
 # SSH設定
 log_info "Collecting SSH configuration"
 safe_copy "/etc/ssh/" "${AUTH_DIR}/ssh/"
+# ホスト秘密鍵は持ち出さない（公開鍵 *.pub と設定は残す）
+if [[ -d "${AUTH_DIR}/ssh" ]]; then
+    find "${AUTH_DIR}/ssh" -type f -name 'ssh_host_*_key' -exec rm -f {} + 2>/dev/null || true
+fi
 
 # ユーザごとのSSH設定
 for user_home in /root /home/*; do

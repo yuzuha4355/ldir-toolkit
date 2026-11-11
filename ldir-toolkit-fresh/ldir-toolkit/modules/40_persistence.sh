@@ -31,7 +31,10 @@ if command -v systemctl &> /dev/null; then
     # カスタムユニットファイルのコピー
     safe_copy "/etc/systemd/system/" "${PERSIST_DIR}/systemd_system/"
     safe_copy "/usr/lib/systemd/system/" "${PERSIST_DIR}/systemd_usr_lib/"
-    safe_copy "/lib/systemd/system/" "${PERSIST_DIR}/systemd_lib/"
+    # usrmerge 環境では /lib は /usr/lib へのリンク。同じ実体なら二重に取らない。
+    if [[ "$(readlink -f /lib/systemd/system 2>/dev/null)" != "$(readlink -f /usr/lib/systemd/system 2>/dev/null)" ]]; then
+        safe_copy "/lib/systemd/system/" "${PERSIST_DIR}/systemd_lib/"
+    fi
 
     # ユーザ単位の systemd user units
     for user_home in /root /home/*; do
@@ -66,9 +69,17 @@ safe_copy "/var/spool/cron/" "${PERSIST_DIR}/user_crontabs/"
 crontab -l > "${PERSIST_DIR}/root_crontab.txt" 2>&1 || echo "No root crontab" > "${PERSIST_DIR}/root_crontab.txt"
 
 # 各ユーザのcrontab
-for user in $(cut -d: -f1 /etc/passwd); do
-    crontab -l -u "$user" > "${PERSIST_DIR}/crontab_${user}.txt" 2>&1 || true
-done
+# crontab を持つユーザの分だけ残す（"no crontab for X" だけのファイルを量産しない）
+if have_cmd crontab; then
+    ensure_dir "${PERSIST_DIR}/user_crontab_l"
+    while IFS=: read -r user _; do
+        [[ -n "$user" ]] || continue
+        out="${PERSIST_DIR}/user_crontab_l/${user}.txt"
+        if ! crontab -l -u "$user" > "$out" 2>/dev/null || [[ ! -s "$out" ]]; then
+            rm -f "$out"
+        fi
+    done < /etc/passwd
+fi
 
 # at jobs
 log_info "Collecting at jobs"

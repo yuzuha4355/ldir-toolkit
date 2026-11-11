@@ -44,7 +44,7 @@ for pid_dir in /proc/[0-9]*; do
         mkdir -p "${EXEC_DIR}/proc_details/${pid}"
 
         # コマンドライン
-        cat "${pid_dir}/cmdline" | tr '\0' ' ' > "${EXEC_DIR}/proc_details/${pid}/cmdline.txt" 2>&1 || true
+        { tr '\0' ' ' < "${pid_dir}/cmdline" > "${EXEC_DIR}/proc_details/${pid}/cmdline.txt"; } 2>/dev/null || true
 
         # 実行ファイルパス
         readlink "${pid_dir}/exe" > "${EXEC_DIR}/proc_details/${pid}/exe.txt" 2>&1 || true
@@ -57,7 +57,7 @@ for pid_dir in /proc/[0-9]*; do
 
         if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
             # 環境変数（情報量が多く、PII/secret が混入しやすい）
-            cat "${pid_dir}/environ" | tr '\0' '\n' > "${EXEC_DIR}/proc_details/${pid}/environ.txt" 2>&1 || true
+            { tr '\0' '\n' < "${pid_dir}/environ" > "${EXEC_DIR}/proc_details/${pid}/environ.txt"; } 2>/dev/null || true
 
             # オープンファイル（重い）
             ls -l "${pid_dir}/fd/" > "${EXEC_DIR}/proc_details/${pid}/open_files.txt" 2>&1 || true

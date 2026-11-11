@@ -13,7 +13,6 @@
   ✓ メインスクリプト: ldir-collect.sh (v2.0 - 拡張版)
   ✓ ライブラリ (3個):
     - lib/common.sh
-    - lib/detect_distro.sh (基本検出)
     - lib/detect_distro_advanced.sh (拡張検出) ★NEW
   
   ✓ 収集モジュール (10個):

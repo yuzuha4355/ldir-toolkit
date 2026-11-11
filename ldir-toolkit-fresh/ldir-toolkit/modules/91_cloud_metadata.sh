@@ -42,19 +42,18 @@ log_info "[${MODULE_NAME}] Starting cloud metadata collection..."
 # タイムアウト設定（クラウドでない場合の待機を短縮）
 TIMEOUT="${LDIR_CLOUD_METADATA_TIMEOUT:-2}"
 
-have_cmd() { command -v "$1" >/dev/null 2>&1; }
-
 curl_get() {
     local url="$1"
     shift || true
-    # shellcheck disable=SC2068
-    curl -sf --max-time "${TIMEOUT}" "$@" "$url"
+    # --noproxy: メタデータ API はリンクローカル。http_proxy 経由で問い合わせると
+    # プロキシ側が応答してしまい、クラウド環境だと誤判定し得る。
+    curl -sf --noproxy '*' --max-time "${TIMEOUT}" "$@" "$url"
 }
 
 # --- AWS IMDS helpers (IMDSv2 best-effort) ---
 aws_get_token() {
     # token TTL 60s (short-lived)
-    curl -sf --max-time "${TIMEOUT}" -X PUT "http://169.254.169.254/latest/api/token" \
+    curl -sf --noproxy '*' --max-time "${TIMEOUT}" -X PUT "http://169.254.169.254/latest/api/token" \
         -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true
 }
 
@@ -84,23 +83,13 @@ aws_curl_user_data() {
 check_aws() {
     log_info "[${MODULE_NAME}] Checking for AWS EC2..."
 
-    if ! have_cmd curl; then
-        log_warn "[${MODULE_NAME}] curl not found; skipping cloud metadata"
-        return 1
-    fi
-
     local token
     token="$(aws_get_token)"
 
-    # Detection: try meta-data root (token first, then no-token)
-    if [[ -n "$token" ]]; then
-        curl_get "http://169.254.169.254/latest/meta-data/" -H "X-aws-ec2-metadata-token: ${token}" &>/dev/null || true
-    fi
-
-    if ! curl_get "http://169.254.169.254/latest/meta-data/" -H "X-aws-ec2-metadata-token: ${token}" &>/dev/null; then
-        # fallback to IMDSv1
+    # Detection: IMDSv2 (token) first, then fall back to IMDSv1
+    if [[ -z "$token" ]] || ! aws_curl_get "" "$token" &>/dev/null; then
         token=""
-        curl_get "http://169.254.169.254/latest/meta-data/" &>/dev/null || return 1
+        aws_curl_get "" &>/dev/null || return 1
     fi
 
     ensure_dir "${MOD_DIR}/aws"
@@ -236,6 +225,12 @@ check_alibaba() {
 
 # すべてのクラウドプロバイダーをチェック
 CLOUD_DETECTED=0
+
+if ! have_cmd curl; then
+    log_warn "[${MODULE_NAME}] curl not found; skipping cloud metadata"
+    echo "curl not available" > "${MOD_DIR}/skipped.txt"
+    exit 0
+fi
 
 check_aws && CLOUD_DETECTED=1
 check_azure && CLOUD_DETECTED=1

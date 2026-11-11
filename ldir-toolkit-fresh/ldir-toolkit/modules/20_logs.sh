@@ -22,7 +22,12 @@ log_info "[20_logs] Starting log collection"
 # systemd journal（存在する場合）
 if command -v journalctl &> /dev/null; then
     log_info "Collecting systemd journal logs"
-    journalctl -xe --no-pager > "${LOG_DIR}/journal_full.txt" 2>&1 || log_warn "Failed to collect full journal"
+    # 直近 1000 行（解説付き）。-e は末尾 1000 行に制限されるため "full" ではない。
+    journalctl -xe --no-pager > "${LOG_DIR}/journal_tail.txt" 2>&1 || log_warn "Failed to collect journal tail"
+    if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+        # 全期間（大きくなり得る）
+        journalctl --no-pager -o short-iso > "${LOG_DIR}/journal_full.txt" 2>&1 || log_warn "Failed to collect full journal"
+    fi
     journalctl --no-pager --since "7 days ago" > "${LOG_DIR}/journal_7days.txt" 2>&1 || true
     journalctl -u ssh --no-pager > "${LOG_DIR}/journal_ssh.txt" 2>&1 || true
     journalctl -u cron --no-pager > "${LOG_DIR}/journal_cron.txt" 2>&1 || true
@@ -36,7 +41,10 @@ safe_copy "/var/log/syslog" "${LOG_DIR}/"
 safe_copy "/var/log/syslog.1" "${LOG_DIR}/"
 safe_copy "/var/log/messages" "${LOG_DIR}/"
 safe_copy "/var/log/messages.1" "${LOG_DIR}/"
-safe_copy "${AUTH_LOG}" "${LOG_DIR}/auth.log"
+# AUTH_LOG は環境検出の結果（auth.log / secure）。見つからない場合は "none"。
+if [[ -n "${AUTH_LOG:-}" && "${AUTH_LOG}" != "none" ]]; then
+    safe_copy "${AUTH_LOG}" "${LOG_DIR}/auth.log"
+fi
 safe_copy "/var/log/kern.log" "${LOG_DIR}/"
 safe_copy "/var/log/dmesg" "${LOG_DIR}/"
 safe_copy "/var/log/boot.log" "${LOG_DIR}/"

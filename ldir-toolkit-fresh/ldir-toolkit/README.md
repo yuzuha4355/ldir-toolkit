@@ -184,7 +184,7 @@ ldir-toolkit/
 ├── ldir-collect.sh         # メインスクリプト
 ├── lib/
 │   ├── common.sh           # 共通関数（ログ、ファイルコピー）
-│   └── detect_distro.sh    # ディストリビューション検出
+│   └── detect_distro_advanced.sh  # 環境検出（ディストリ/init/パッケージ管理等）
 └── modules/
     ├── 10_system_info.sh   # システム情報
     ├── 20_logs.sh          # ログ収集

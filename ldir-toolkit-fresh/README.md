@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -39,7 +39,10 @@ LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. S
 sudo ./ldir-collect.sh /tmp/ldir_output
 
 # full
-sudo LDIR_MODE=full ./ldir-collect.sh /tmp/ldir_output
+sudo ./ldir-collect.sh --mode full /tmp/ldir_output
+
+# Also pack the result into a tar.gz with a checksum
+sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 ```
 
 ### Installation
@@ -103,21 +106,24 @@ sha256sum -c ldir-toolkit-extended-v0.2.0.tar.gz.sha256
 
 ```
 /tmp/ldir_output/[hostname]_[timestamp]/
-├── system_info/
-├── logs/
-├── auth/
-├── persistence/
-├── execution/
-├── network/
-├── filesystem/
-├── web/
-├── custom_environment/
-├── cloud_metadata/
-├── metadata/
-│   ├── manifest.txt       # File list with timestamps
-│   └── file_hashes.txt    # SHA256 hashes
-└── execution.log          # Tool execution log
+├── system/                # 10_system_info
+├── logs/                  # 20_logs
+├── config/                # 30_auth (passwd, sudoers, PAM, SSH)
+├── persistence/           # 40_persistence
+├── execution/             # 50_execution
+├── network/               # 60_network
+├── filesystem/            # 70_filesystem
+├── web/                   # 80_web (disabled in fast mode)
+├── custom_environment/    # 90_custom_environment
+├── cloud_metadata/        # 91_cloud_metadata (disabled in fast mode)
+└── metadata/
+    ├── manifest.txt       # Environment summary and per-module result
+    ├── collection.log     # Tool execution log
+    ├── modules/*.log      # One log per module
+    └── file_hashes.txt    # SHA256 of every collected file (relative paths)
 ```
+
+With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are written next to the directory.
 
 ---
 
@@ -167,17 +173,22 @@ tar -czf ldir_result_$(hostname)_$(date +%Y%m%d_%H%M%S).tar.gz /tmp/ldir_output/
 
 ## Evidence Integrity
 
-Tool generates three integrity files:
-- `manifest.txt`: file list with timestamps
-- `file_hashes.txt`: SHA256 for all collected files
-- `execution.log`: tool execution log
+Files under `metadata/`:
+- `manifest.txt`: environment summary, per-module result (warn/error counts, duration)
+- `file_hashes.txt`: SHA256 for all collected files, recorded with relative paths
+- `collection.log`: tool execution log
 
-Verification:
+Verification (works on the analysis machine too, since paths are relative):
 ```bash
-cat /tmp/ldir_output/*/metadata/manifest.txt
-sha256sum -c /tmp/ldir_output/*/metadata/file_hashes.txt
-cat /tmp/ldir_output/*/execution.log
+cd /tmp/ldir_output/<hostname>_<timestamp>
+cat metadata/manifest.txt
+sha256sum -c --quiet metadata/file_hashes.txt
 ```
+
+The collector prints the SHA256 of `file_hashes.txt` itself at the end of the run.
+Record that value in your chain-of-custody notes.
+
+Exit status: `0` all modules completed, `1` setup error, `2` at least one module failed.
 
 ---
 
@@ -252,6 +263,20 @@ MIT License - see [LICENSE](LICENSE)
 
 ---
 
+## Development
+
+```bash
+make lint     # shellcheck
+make test     # unit tests, no root needed
+sudo make smoke   # real collection + integrity checks; run in a container or test VM
+```
+
+- Modules are discovered automatically: drop `NN_name.sh` into `ldir-toolkit/modules/` and it runs in numeric order. Each module receives the collection directory as `$1`.
+- Use `safe_copy`, `save_command_output`, `log_*` from `lib/common.sh`. A missing source file is expected and logged as DEBUG; `log_warn` is for things that should have worked.
+- CI (`.github/workflows/ci.yml`) runs lint, unit tests, and the smoke test inside containers for several distributions.
+
+---
+
 ## Contact
 
 - Issues: [GitHub Issues](https://github.com/yuzuha4355/ldir-toolkit/issues)
@@ -259,5 +284,5 @@ MIT License - see [LICENSE](LICENSE)
 
 ---
 
-**Version**: 0.2.0  
+**Version**: 0.2.2  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

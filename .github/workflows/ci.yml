@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: ldir-toolkit-fresh
+
+jobs:
+  lint:
+    name: Lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: make lint
+      - name: Unit tests
+        run: make test
+
+  smoke:
+    name: Smoke (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ubuntu:24.04
+            setup: "true"
+          - image: ubuntu:20.04
+            setup: "true"
+          - image: debian:12
+            setup: "true"
+          - image: rockylinux:9
+            setup: dnf install -y tar gzip findutils
+          - image: almalinux:8
+            setup: dnf install -y tar gzip findutils
+          - image: fedora:latest
+            setup: dnf install -y tar gzip findutils
+          - image: amazonlinux:2023
+            setup: dnf install -y tar gzip findutils
+          - image: archlinux:latest
+            setup: "true"
+          - image: opensuse/leap:15
+            setup: zypper --non-interactive install tar gzip findutils
+          # busybox userland: only bash is added
+          - image: alpine:3
+            setup: apk add --no-cache bash
+    steps:
+      - name: Install prerequisites
+        working-directory: /
+        run: ${{ matrix.setup }}
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: bash tests/test_unit.sh
+      - name: Smoke test
+        run: bash tests/test_smoke.sh
