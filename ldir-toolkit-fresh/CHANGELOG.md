@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fast mode copied each user's whole `~/.config` (browser profiles included); now a listing in fast mode, full copy in full mode
 - Cloud metadata probes could be answered by an HTTP proxy (`--noproxy` added)
 - `/opt/*/conf` directories from different products overwrote each other
+- On BusyBox (Alpine) every `find -ls` listing was silently empty; falls back to `ls -ld`
 - `--help` exited with status 1; unknown options were treated as an output directory
 
 ### Changed

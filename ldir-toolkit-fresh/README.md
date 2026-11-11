@@ -182,7 +182,7 @@ Verification (works on the analysis machine too, since paths are relative):
 ```bash
 cd /tmp/ldir_output/<hostname>_<timestamp>
 cat metadata/manifest.txt
-sha256sum -c --quiet metadata/file_hashes.txt
+sha256sum -c metadata/file_hashes.txt | grep -v ': OK$'   # prints only mismatches
 ```
 
 The collector prints the SHA256 of `file_hashes.txt` itself at the end of the run.

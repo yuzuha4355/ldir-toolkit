@@ -49,7 +49,7 @@ check "all ${expected} modules succeeded (got ${actual})" test "${expected}" -eq
 check "each module has its own log" test "$(find "${D}/metadata/modules" -name '*.log' | wc -l)" -eq "${expected}"
 
 echo "== integrity =="
-check "every file verifies against file_hashes.txt" bash -c "cd '${D}' && sha256sum -c --quiet metadata/file_hashes.txt"
+check "every file verifies against file_hashes.txt" bash -c "cd '${D}' && sha256sum -c metadata/file_hashes.txt >/dev/null"
 check_not "hash list uses relative paths" grep -q "  /" "${D}/metadata/file_hashes.txt"
 listed="$(wc -l < "${D}/metadata/file_hashes.txt")"
 present="$(find "${D}" -type f ! -name file_hashes.txt | wc -l)"
@@ -58,10 +58,10 @@ check "hash list covers every file (${listed}/${present})" test "${listed}" -eq 
 echo "== archive =="
 A="$(find "${WORK}/out" -maxdepth 1 -name '*.tar.gz' | head -1)"
 check "archive was created" test -s "${A}"
-check "archive checksum verifies" bash -c "cd '${WORK}/out' && sha256sum -c --quiet *.tar.gz.sha256"
+check "archive checksum verifies" bash -c "cd '${WORK}/out' && sha256sum -c *.tar.gz.sha256 >/dev/null"
 mkdir -p "${WORK}/moved"
 tar -xzf "${A}" -C "${WORK}/moved"
-check "extracted archive verifies from another path" bash -c "cd '${WORK}/moved'/* && sha256sum -c --quiet metadata/file_hashes.txt"
+check "extracted archive verifies from another path" bash -c "cd '${WORK}/moved'/* && sha256sum -c metadata/file_hashes.txt >/dev/null"
 
 echo "== content =="
 for f in system/uname.txt system/kernel_version.txt config/passwd config/group \

@@ -33,48 +33,48 @@ lsblk -f > "${FS_DIR}/block_devices_filesystems.txt" 2>&1 || true
 # 最近変更されたファイル
 log_info "Finding recently modified files"
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 -ls > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || log_debug "find reported errors while scanning / (expected for /proc etc.)"
+    find / "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 "${LDIR_FIND_LS[@]}" > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || log_debug "find reported errors while scanning / (expected for /proc etc.)"
 else
     # fast mode: limit to high-signal paths to avoid long scans
     {
         for p in /etc /var/log /var/spool /root /home /tmp /var/tmp; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -mtime -7 "${LDIR_FIND_LS[@]}" 2>/dev/null
         done
     } > "${FS_DIR}/modified_last_7days.txt" 2>/dev/null || true
 fi
 
-find /tmp "${LDIR_FIND_PRUNE[@]}" -type f -ls > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
-find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f -ls > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
+find /tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
+find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
 
 # SUID/SGID ファイル（権限昇格に悪用される可能性）
 log_info "Finding SUID/SGID files"
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) -ls > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_debug "find reported errors during SUID/SGID search"
+    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_debug "find reported errors during SUID/SGID search"
 
     # ワールドライタブルファイル（脆弱性の可能性）
     log_info "Finding world-writable files"
-    find / "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 -ls > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+    find / "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
 else
     # fast mode: focus on common abuse paths
     {
         for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" 2>/dev/null
         done
     } > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || true
 
     {
         for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
             [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 -ls 2>/dev/null
+            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" 2>/dev/null
         done
     } > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
 fi
 
 # 隠しファイル（ドットファイル）
 log_info "Finding hidden files in sensitive directories"
-find /tmp /var/tmp /dev/shm "${LDIR_FIND_PRUNE[@]}" -name ".*" -ls > "${FS_DIR}/hidden_files_sensitive.txt" 2>/dev/null || true
+find /tmp /var/tmp /dev/shm "${LDIR_FIND_PRUNE[@]}" -name ".*" "${LDIR_FIND_LS[@]}" > "${FS_DIR}/hidden_files_sensitive.txt" 2>/dev/null || true
 
 # /dev/shm の内容（メモリベースのファイル、マルウェアが使用することがある）
 ls -laR /dev/shm > "${FS_DIR}/dev_shm_contents.txt" 2>&1 || true
@@ -138,7 +138,7 @@ if have_cmd rpm && rpm -qa >/dev/null 2>&1 && [[ -n "$(rpm -qa 2>/dev/null | hea
 fi
 
 # /etc の内容リスト（設定ファイル全体像）
-find /etc -type f -ls > "${FS_DIR}/etc_file_list.txt" 2>/dev/null || true
+find /etc -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/etc_file_list.txt" 2>/dev/null || true
 
 # ディレクトリ構造（トップレベル）
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then

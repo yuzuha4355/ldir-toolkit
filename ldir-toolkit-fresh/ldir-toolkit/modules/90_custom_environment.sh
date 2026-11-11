@@ -214,7 +214,7 @@ done
 for user_home in /root /home/*; do
     if [[ -d "$user_home/.config" ]]; then
         username="$(basename "$user_home")"
-        find "$user_home/.config" -maxdepth 3 -ls > "${MOD_DIR}/custom_configs/user_config_${username}_listing.txt" 2>/dev/null || true
+        find "$user_home/.config" -maxdepth 3 "${LDIR_FIND_LS[@]}" > "${MOD_DIR}/custom_configs/user_config_${username}_listing.txt" 2>/dev/null || true
         if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
             safe_copy "$user_home/.config" "${MOD_DIR}/custom_configs/user_config_${username}"
         fi

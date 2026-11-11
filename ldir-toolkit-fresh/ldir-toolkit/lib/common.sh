@@ -139,6 +139,16 @@ else
     LDIR_FIND_PRUNE=()
 fi
 
+# find 用: 詳細表示アクション。BusyBox の find は -ls を持たないため、
+# その場合は ls -ld に切り替える（黙って空の出力になるのを防ぐ）。
+# 使い方: find /etc -type f "${LDIR_FIND_LS[@]}"
+# shellcheck disable=SC2034  # モジュール側で使用
+if find / -maxdepth 0 -ls >/dev/null 2>&1; then
+    LDIR_FIND_LS=( -ls )
+else
+    LDIR_FIND_LS=( -exec ls -ld {} + )
+fi
+
 # コマンド出力を保存（出力ファイルの親ディレクトリを自動作成）
 save_command_output() {
     local cmd="$1"
