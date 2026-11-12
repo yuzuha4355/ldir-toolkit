@@ -117,14 +117,12 @@ if [[ -d /sys/fs/bpf ]]; then
     find /sys/fs/bpf "${LDIR_FIND_LS[@]}" > "${K_DIR}/bpf_pinned.txt" 2>/dev/null || true
 fi
 # 各プロセスが保持する BPF 関連 fd（bpftool が無い環境での手がかり）
-{
-    for fd in /proc/[0-9]*/fd/*; do
-        target="$(readlink "$fd" 2>/dev/null)" || continue
-        case "$target" in
-            anon_inode:bpf-*) echo "$fd -> $target" ;;
-        esac
-    done
-} > "${K_DIR}/bpf_fds.txt" 2>/dev/null || true
+# fd ごとに readlink を起動すると数千回の fork になるため、ls 1 回で済ませる
+# shellcheck disable=SC2012  # リンク先の表示が目的なので ls を使う
+ls -l /proc/[0-9]*/fd 2>/dev/null \
+    | awk '/^\/proc\/[0-9]+\/fd:$/ { dir = substr($0, 1, length($0) - 1); next }
+           /anon_inode:\[?bpf/      { print dir "/" $(NF-2) " -> " $NF }' \
+    > "${K_DIR}/bpf_fds.txt" 2>/dev/null || true
 
 # --- file capabilities ---
 # SUID を使わずに特権を持たせる手段。cap_setuid / cap_sys_admin 等は権限昇格に直結する。
@@ -133,11 +131,13 @@ if have_cmd getcap; then
     if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
         getcap -r / 2>/dev/null | grep -vF "${OUTPUT_DIR%/}/" > "${K_DIR}/file_capabilities.txt" || true
     else
-        # fast mode: 実行ファイルが置かれる場所と、悪用されやすい場所に限定
+        # fast mode: 実行ファイルの標準的な置き場所と、悪用されやすい一時領域に限定する。
+        # /usr/lib /opt /home /usr/local 全体は実機では数十 GB になり得るため full に任せる
+        # （GitHub ランナーの実機で、ここだけで 2 分以上かかっていた）。
         {
-            for p in /usr/bin /usr/sbin /usr/local /usr/lib /usr/libexec /opt /home /root /tmp /var/tmp /dev/shm; do
+            for p in /usr/bin /usr/sbin /usr/libexec /usr/local/bin /usr/local/sbin /tmp /var/tmp /dev/shm; do
                 [[ -e "$p" ]] || continue
-                getcap -r "$p" 2>/dev/null
+                run_limited 30 getcap -r "$p" 2>/dev/null
             done
         } | grep -vF "${OUTPUT_DIR%/}/" > "${K_DIR}/file_capabilities.txt" || true
     fi

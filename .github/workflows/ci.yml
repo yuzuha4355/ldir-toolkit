@@ -57,3 +57,19 @@ jobs:
         run: bash tests/test_unit.sh
       - name: Smoke test
         run: bash tests/test_smoke.sh
+
+  # コンテナではなく実機（systemd と Docker が稼働）での実収集。
+  # コンテナでは見えない遅さや失敗を拾う。
+  smoke-host:
+    name: Smoke (ubuntu-latest host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test
+        run: sudo env KEEP_OUTPUT=1 TMPDIR=/tmp/ldir-smoke bash -c 'mkdir -p "$TMPDIR" && bash tests/test_smoke.sh'
+      - name: Module results and timings
+        if: always()
+        run: |
+          sudo sh -c 'sed -n "/^=== Collection Modules/,\$p" /tmp/ldir-smoke/*/out/*/metadata/manifest.txt'
+          # 進行ログ（時刻付き）。どの処理に時間がかかったかを追える
+          sudo sh -c 'grep -h "^\[" /tmp/ldir-smoke/*/out/*/metadata/collection.log' | cut -c1-200
