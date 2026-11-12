@@ -44,7 +44,10 @@ jobs:
         run: |
           mkdir -p /tmp/pkg && tar -xzf "dist/ldir-toolkit-v${{ steps.ver.outputs.version }}.tar.gz" -C /tmp/pkg
           sudo bash "/tmp/pkg/ldir-toolkit-v${{ steps.ver.outputs.version }}/ldir-collect.sh" /tmp/pkg/out > /dev/null
-          cd /tmp/pkg/out/* && sudo sha256sum -c metadata/file_hashes.txt > /dev/null
+          # 収集ディレクトリは root のみ読める（700）。検証も root で行う
+          sudo sh -c 'cd /tmp/pkg/out/*/ && sha256sum -c metadata/file_hashes.txt > /dev/null'
+          # モジュールごとの結果と所要時間をログに残す
+          sudo sh -c 'sed -n "/^=== Collection Modules/,\$p" /tmp/pkg/out/*/metadata/manifest.txt'
 
       - name: Publish release
         if: steps.ver.outputs.exists == 'false'
