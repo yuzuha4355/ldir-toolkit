@@ -2,9 +2,19 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
+
+---
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [docs/PROCEDURE.md](docs/PROCEDURE.md) | 収集手順書: 準備から収集、検証、持ち出し、後始末まで（作業記録の様式付き） |
+| [docs/SPECIFICATION.md](docs/SPECIFICATION.md) | 仕様書: オプション、収集順、出力ファイル、秘匿情報の扱い、モジュール規約 |
+| [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ---
 
@@ -48,9 +58,9 @@ sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 ### Installation
 
 ```bash
-wget https://github.com/yuzuha4355/ldir-toolkit/releases/download/v0.2.0/ldir-toolkit-extended-v0.2.0.tar.gz
-tar -xzf ldir-toolkit-extended-v0.2.0.tar.gz
-cd ldir-toolkit-v0.2.0
+wget https://github.com/yuzuha4355/ldir-toolkit/releases/download/v0.3.0/ldir-toolkit-v0.3.0.tar.gz
+tar -xzf ldir-toolkit-v0.3.0.tar.gz
+cd ldir-toolkit-v0.3.0
 ```
 
 ### Usage
@@ -66,7 +76,7 @@ tar -czf ldir_result_$(hostname)_$(date +%Y%m%d_%H%M%S).tar.gz /tmp/ldir_output/
 ### Verification
 
 ```bash
-sha256sum -c ldir-toolkit-extended-v0.2.0.tar.gz.sha256
+sha256sum -c ldir-toolkit-v0.3.0.tar.gz.sha256
 ```
 
 ---
@@ -87,8 +97,27 @@ sha256sum -c ldir-toolkit-extended-v0.2.0.tar.gz.sha256
 
 ## Collection Modules
 
-| Module | Artifacts |
-|--------|-----------|
+Modules run in order of volatility: what disappears first is collected first.
+
+| # | Module | Output | Artifacts |
+|---|--------|--------|-----------|
+| 10 | system_info | `system/` | OS, kernel, hardware, time, environment |
+| 15 | execution | `execution/` | processes, `/proc` details, shell history, auditd |
+| 20 | network | `network/` | connections, listeners, routes, ARP, firewall |
+| 25 | kernel | `kernel/` | kernel modules, eBPF, `ld.so.preload`, file capabilities, sysctl |
+| 30 | containers | `containers/` | Docker / Podman / CRI / Kubernetes node |
+| 40 | auth | `config/` | users, sudoers, PAM, SSH config |
+| 50 | persistence | `persistence/` | systemd, cron, at, init scripts, autostart, shell init files |
+| 60 | logs | `logs/` | journal, syslog, auth logs, login history |
+| 70 | filesystem | `filesystem/` | mounts, recent changes, SUID/SGID, unpackaged binaries |
+| 80 | web | `web/` | browser history, cookies (off in fast mode) |
+| 90 | custom_environment | `custom_environment/` | init system, packages, SELinux/AppArmor |
+| 91 | cloud_metadata | `cloud_metadata/` | AWS / Azure / GCP / OCI / DigitalOcean / Alibaba (off in fast mode) |
+
+Secret-looking environment variable values (tokens, passwords, keys) are masked by default; names are kept.
+Use `--no-redact` to keep them. Private keys and kubeconfigs are never collected. See the specification, section 8.
+
+--------|-----------|
 | system_info | uname, hostname, users, groups |
 | logs | syslog, auth.log, journal |
 | auth | sudoers, SSH config, PAM |
@@ -107,11 +136,13 @@ sha256sum -c ldir-toolkit-extended-v0.2.0.tar.gz.sha256
 ```
 /tmp/ldir_output/[hostname]_[timestamp]/
 ├── system/                # 10_system_info
-├── logs/                  # 20_logs
-├── config/                # 30_auth (passwd, sudoers, PAM, SSH)
-├── persistence/           # 40_persistence
-├── execution/             # 50_execution
-├── network/               # 60_network
+├── execution/             # 15_execution
+├── network/               # 20_network
+├── kernel/                # 25_kernel
+├── containers/            # 30_containers
+├── config/                # 40_auth (passwd, sudoers, PAM, SSH)
+├── persistence/           # 50_persistence
+├── logs/                  # 60_logs
 ├── filesystem/            # 70_filesystem
 ├── web/                   # 80_web (disabled in fast mode)
 ├── custom_environment/    # 90_custom_environment
@@ -127,13 +158,15 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 
 ---
 
-## What's New (v0.2.0)
+## What's New (v0.3.0)
 
-- Extended distribution support (20+)
-- Custom environment detection module
-- Cloud metadata collection (AWS IMDSv2, GCP, Azure)
-- Advanced distro detection logic (multi-method fallback)
-- systemd-less environment support
+- Collection order follows the order of volatility (processes and network before logs and filesystem)
+- New `kernel` module: kernel modules and taint, hidden-module cross-check, eBPF, `ld.so.preload`, file capabilities
+- New `containers` module: Docker / Podman / CRI / Kubernetes node artifacts
+- Secret values in collected environment variables are masked by default
+- Procedure and specification documents; `make dist` builds the release archive
+
+See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ---
 
@@ -141,8 +174,8 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 
 - OS: Linux (see supported distributions)
 - Permissions: root or sudo
-- Storage: ~10GB free space
-- Execution time: 2-5 minutes
+- Storage: a few hundred MB (fast); several GB possible (full)
+- Execution time: about a minute (fast); longer in full mode
 - Network: not required
 
 ---
@@ -151,8 +184,8 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 
 ### Direct execution on target server
 ```bash
-tar -xzf ldir-toolkit-extended-v0.2.0.tar.gz
-cd ldir-toolkit-v0.2.0
+tar -xzf ldir-toolkit-v0.3.0.tar.gz
+cd ldir-toolkit-v0.3.0
 sudo ./ldir-collect.sh /tmp/ldir_output
 tar -czf ldir_result_$(hostname)_$(date +%Y%m%d_%H%M%S).tar.gz /tmp/ldir_output/
 ```
@@ -267,11 +300,12 @@ MIT License - see [LICENSE](LICENSE)
 
 ```bash
 make lint     # shellcheck
+make dist     # release archive + .sha256 in dist/
 make test     # unit tests, no root needed
 sudo make smoke   # real collection + integrity checks; run in a container or test VM
 ```
 
-- Modules are discovered automatically: drop `NN_name.sh` into `ldir-toolkit/modules/` and it runs in numeric order. Each module receives the collection directory as `$1`.
+- Modules are discovered automatically: drop `NN_name.sh` into `ldir-toolkit/modules/` and it runs in numeric order. The number encodes volatility order, and every module must be listed in `docs/SPECIFICATION.md` (a unit test checks this). Each module receives the collection directory as `$1`.
 - Use `safe_copy`, `save_command_output`, `log_*` from `lib/common.sh`. A missing source file is expected and logged as DEBUG; `log_warn` is for things that should have worked.
 - CI (`.github/workflows/ci.yml`) runs lint, unit tests, and the smoke test inside containers for several distributions.
 
@@ -284,5 +318,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.2.2  
+**Version**: 0.3.0  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

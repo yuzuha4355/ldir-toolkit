@@ -149,6 +149,65 @@ else
     LDIR_FIND_LS=( -exec ls -ld {} + )
 fi
 
+# 環境変数の秘匿値マスク（stdin -> stdout のフィルタ）
+# 収集物は調査担当者や外部ベンダへ渡るため、トークン類の値は既定で伏せる。
+# 名前は残す（「何が設定されていたか」は調査に必要）。値は文字数だけ残す。
+#   AWS_SECRET_ACCESS_KEY=abcd...   -> AWS_SECRET_ACCESS_KEY=<redacted:40 chars>
+#   HTTPS_PROXY=http://u:pw@host/   -> HTTPS_PROXY=http://u:<redacted>@host/
+#   "DB_PASSWORD=x",  (docker inspect の Env 配列) も同じ規則で処理する。
+# LDIR_REDACT_SECRETS=0 で無効化（原本をそのまま残す）。
+# 注意: PWD / OLDPWD / SSH_AUTH_SOCK / XDG_SESSION_ID のような無害な変数を巻き込まないこと
+LDIR_SECRET_NAME_RE='(TOKEN([^S]|$)|SECRET|PASSW|_PWD$|PGPASS|CREDENTIAL|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|_KEY$|^KEY$|AUTHORIZATION|_AUTH$|COOKIE|BEARER|JWT|SIGNATURE)'
+
+redact_env() {
+    if [[ "${LDIR_REDACT_SECRETS:-1}" != "1" ]]; then
+        cat
+        return 0
+    fi
+    awk -v re="${LDIR_SECRET_NAME_RE}" '
+    {
+        line = $0
+        # 形式: [空白]["]NAME=VALUE["][,]
+        if (match(line, /^[ \t]*"?[A-Za-z_][A-Za-z0-9_]*=/)) {
+            head = substr(line, 1, RLENGTH)          # 先頭〜"=" まで
+            rest = substr(line, RLENGTH + 1)
+            name = head
+            sub(/^[ \t]*"?/, "", name); sub(/=$/, "", name)
+            tail = ""
+            if (head ~ /^[ \t]*"/ && match(rest, /",?[ \t]*$/)) {
+                tail = substr(rest, RSTART)
+                rest = substr(rest, 1, RSTART - 1)
+            }
+            # LDIR_* は本ツール自身の設定値（秘匿値ではない）
+            if (toupper(name) ~ re && name !~ /^LDIR_/ && rest != "") {
+                print head "<redacted:" length(rest) " chars>" tail
+                next
+            }
+            # URL に埋め込まれた認証情報  scheme://user:password@host
+            while (match(rest, /:\/\/[^:\/@ ]+:[^@\/ ]+@/)) {
+                cred = substr(rest, RSTART, RLENGTH)
+                user = cred; sub(/^:\/\//, "", user); sub(/:.*$/, "", user)
+                rest = substr(rest, 1, RSTART - 1) "://" user ":<redacted>@" substr(rest, RSTART + RLENGTH)
+                if (++guard > 20) break
+            }
+            print head rest tail
+            next
+        }
+        print line
+    }'
+}
+
+# 時間制限付きでコマンドを実行する（応答しないデーモンへの問い合わせ対策）
+# 使い方: run_limited 20 docker ps -a
+run_limited() {
+    local secs="$1"; shift
+    if have_cmd timeout; then
+        timeout "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
 # コマンド出力を保存（出力ファイルの親ディレクトリを自動作成）
 save_command_output() {
     local cmd="$1"

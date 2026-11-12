@@ -47,8 +47,8 @@ ip route show > "${SYS_DIR}/routing_table.txt" 2>&1 || route -n > "${SYS_DIR}/ro
 # タイムゾーン
 timedatectl > "${SYS_DIR}/timezone.txt" 2>&1 || date > "${SYS_DIR}/timezone.txt" 2>&1
 
-# 環境変数
-env > "${SYS_DIR}/environment_variables.txt" 2>&1
+# 環境変数（収集プロセス自身のもの。sudo 元のシェルのトークン類が入り得るため値を伏せる）
+env 2>&1 | redact_env > "${SYS_DIR}/environment_variables.txt"
 
 log_success "[10_system_info] System information collection completed"
 exit 0

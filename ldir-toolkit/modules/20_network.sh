@@ -6,7 +6,7 @@
 
 OUTPUT_DIR="${1:-}"
 if [[ -z "${OUTPUT_DIR}" ]]; then
-    echo "[ERROR] [60_network] Missing output directory argument" >&2
+    echo "[ERROR] [20_network] Missing output directory argument" >&2
     exit 1
 fi
 
@@ -15,9 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 NET_DIR="${OUTPUT_DIR}/network"
-ensure_dir "${NET_DIR}" || { log_error "[60_network] Failed to create ${NET_DIR}"; exit 1; }
+ensure_dir "${NET_DIR}" || { log_error "[20_network] Failed to create ${NET_DIR}"; exit 1; }
 
-log_info "[60_network] Starting network information collection"
+log_info "[20_network] Starting network information collection"
 
 # ネットワーク接続状態
 log_info "Collecting network connection states"
@@ -108,5 +108,5 @@ safe_copy "/etc/NetworkManager/" "${NET_DIR}/NetworkManager/"
 # systemd-networkd設定
 safe_copy "/etc/systemd/network/" "${NET_DIR}/systemd-network/"
 
-log_success "[60_network] Network information collection completed"
+log_success "[20_network] Network information collection completed"
 exit 0

@@ -4,14 +4,14 @@ services:
   # Ubuntu 22.04 テスト環境
   ubuntu-test:
     build:
-      context: .
-      dockerfile: Dockerfile.ubuntu
+      context: ..
+      dockerfile: docker-test/Dockerfile.ubuntu
     container_name: ldir-ubuntu-test
     hostname: ubuntu-forensics
     privileged: true
     volumes:
       - ./shared-output:/output
-      - ./ldir-toolkit:/opt/ldir-toolkit
+      - ../ldir-toolkit:/opt/ldir-toolkit
     tty: true
     stdin_open: true
     networks:
@@ -20,14 +20,14 @@ services:
   # Debian 12 テスト環境
   debian-test:
     build:
-      context: .
-      dockerfile: Dockerfile.debian
+      context: ..
+      dockerfile: docker-test/Dockerfile.debian
     container_name: ldir-debian-test
     hostname: debian-forensics
     privileged: true
     volumes:
       - ./shared-output:/output
-      - ./ldir-toolkit:/opt/ldir-toolkit
+      - ../ldir-toolkit:/opt/ldir-toolkit
     tty: true
     stdin_open: true
     networks:
@@ -36,14 +36,14 @@ services:
   # Rocky Linux 9 (CentOS後継) テスト環境
   rocky-test:
     build:
-      context: .
-      dockerfile: Dockerfile.centos
+      context: ..
+      dockerfile: docker-test/Dockerfile.centos
     container_name: ldir-rocky-test
     hostname: rocky-forensics
     privileged: true
     volumes:
       - ./shared-output:/output
-      - ./ldir-toolkit:/opt/ldir-toolkit
+      - ../ldir-toolkit:/opt/ldir-toolkit
     tty: true
     stdin_open: true
     networks:

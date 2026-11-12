@@ -6,7 +6,7 @@
 
 OUTPUT_DIR="${1:-}"
 if [[ -z "${OUTPUT_DIR}" ]]; then
-    echo "[ERROR] [50_execution] Missing output directory argument" >&2
+    echo "[ERROR] [15_execution] Missing output directory argument" >&2
     exit 1
 fi
 
@@ -15,9 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 EXEC_DIR="${OUTPUT_DIR}/execution"
-ensure_dir "${EXEC_DIR}" || { log_error "[50_execution] Failed to create ${EXEC_DIR}"; exit 1; }
+ensure_dir "${EXEC_DIR}" || { log_error "[15_execution] Failed to create ${EXEC_DIR}"; exit 1; }
 
-log_info "[50_execution] Starting execution history collection"
+log_info "[15_execution] Starting execution history collection"
 
 # 現在実行中のプロセス
 log_info "Collecting running processes information"
@@ -57,7 +57,7 @@ for pid_dir in /proc/[0-9]*; do
 
         if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
             # 環境変数（情報量が多く、PII/secret が混入しやすい）
-            { tr '\0' '\n' < "${pid_dir}/environ" > "${EXEC_DIR}/proc_details/${pid}/environ.txt"; } 2>/dev/null || true
+            { tr '\0' '\n' < "${pid_dir}/environ" | redact_env > "${EXEC_DIR}/proc_details/${pid}/environ.txt"; } 2>/dev/null || true
 
             # オープンファイル（重い）
             ls -l "${pid_dir}/fd/" > "${EXEC_DIR}/proc_details/${pid}/open_files.txt" 2>&1 || true
@@ -111,5 +111,5 @@ if command -v lsof &> /dev/null; then
     lsof -i > "${EXEC_DIR}/lsof_network.txt" 2>&1 || true
 fi
 
-log_success "[50_execution] Execution history collection completed"
+log_success "[15_execution] Execution history collection completed"
 exit 0

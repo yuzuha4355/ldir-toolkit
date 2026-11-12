@@ -7,10 +7,6 @@ on:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: ldir-toolkit-fresh
-
 jobs:
   lint:
     name: Lint and unit tests

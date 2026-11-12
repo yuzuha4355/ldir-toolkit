@@ -16,7 +16,7 @@ export PATH
 # NOTE: 変数名を VERSION にしないこと。/etc/os-release も VERSION を定義しており、
 #       source されると上書きされる（v0.2.1 でマニフェストに OS のバージョンが
 #       記録されていた原因）。
-LDIR_VERSION="0.2.2"
+LDIR_VERSION="0.3.0"
 export LDIR_VERSION
 
 # スクリプトディレクトリ取得（先に確定）
@@ -50,6 +50,8 @@ Options:
   -m, --mode MODE     fast (default) or full. Same as LDIR_MODE.
   -a, --archive       Pack the result into <host>_<timestamp>.tar.gz
                       and write a .sha256 next to it. Same as LDIR_ARCHIVE=1.
+      --no-redact     Keep secret-looking environment variable values as-is.
+                      Same as LDIR_REDACT_SECRETS=0. Default is to mask them.
   -l, --list-modules  List collection modules and exit
   -V, --version       Print version and exit
   -h, --help          Show this help and exit
@@ -59,6 +61,8 @@ Environment:
   LDIR_ENABLE_WEB              1/0  browser artifacts   (default: 0 fast, 1 full)
   LDIR_ENABLE_CLOUD_METADATA   1/0  cloud metadata API  (default: 0 fast, 1 full)
   LDIR_ARCHIVE                 1/0  create tar.gz       (default: 0)
+  LDIR_REDACT_SECRETS          1/0  mask token/password values in collected
+                                    environment variables (default: 1)
   LDIR_VERBOSE                 1/0  also print "not present" notices
 
 Examples:
@@ -87,6 +91,7 @@ list_modules() {
 # - full: exhaustive scans (may be slow & large)
 LDIR_MODE="${LDIR_MODE:-fast}"
 LDIR_ARCHIVE="${LDIR_ARCHIVE:-0}"
+LDIR_REDACT_SECRETS="${LDIR_REDACT_SECRETS:-1}"
 OUTPUT_BASE=""
 
 # 引数解析
@@ -115,6 +120,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -a|--archive)
             LDIR_ARCHIVE=1
+            shift
+            ;;
+        --no-redact)
+            LDIR_REDACT_SECRETS=0
             shift
             ;;
         --)
@@ -157,7 +166,7 @@ else
     : "${LDIR_ENABLE_WEB:=1}"
     : "${LDIR_ENABLE_CLOUD_METADATA:=1}"
 fi
-export LDIR_ENABLE_WEB LDIR_ENABLE_CLOUD_METADATA
+export LDIR_ENABLE_WEB LDIR_ENABLE_CLOUD_METADATA LDIR_REDACT_SECRETS
 
 # root権限チェック
 if [[ "${EUID}" -ne 0 ]]; then
@@ -199,7 +208,7 @@ METADATA_DIR="${COLLECTION_DIR}/metadata"
 mkdir -p "${METADATA_DIR}/modules"
 
 log_info "LDIR-Collector Version: ${LDIR_VERSION}"
-log_info "Mode: ${LDIR_MODE} (web=${LDIR_ENABLE_WEB}, cloud_metadata=${LDIR_ENABLE_CLOUD_METADATA})"
+log_info "Mode: ${LDIR_MODE} (web=${LDIR_ENABLE_WEB}, cloud_metadata=${LDIR_ENABLE_CLOUD_METADATA}, redact_secrets=${LDIR_REDACT_SECRETS})"
 log_info "Output directory: ${COLLECTION_DIR}"
 
 # 環境検出ライブラリ読み込み
@@ -219,6 +228,7 @@ cat > "${MANIFEST}" << EOF
 === LDIR-Collector Collection Manifest ===
 Collector Version: ${LDIR_VERSION}
 Collection Mode: ${LDIR_MODE}
+Secret Redaction: ${LDIR_REDACT_SECRETS}
 Collection Time: $(date '+%Y-%m-%d %H:%M:%S %z')
 Collection Time (UTC): $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 Hostname: ${HOST_NAME}

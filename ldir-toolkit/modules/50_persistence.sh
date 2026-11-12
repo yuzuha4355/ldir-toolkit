@@ -6,7 +6,7 @@
 
 OUTPUT_DIR="${1:-}"
 if [[ -z "${OUTPUT_DIR}" ]]; then
-    echo "[ERROR] [40_persistence] Missing output directory argument" >&2
+    echo "[ERROR] [50_persistence] Missing output directory argument" >&2
     exit 1
 fi
 
@@ -15,9 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 PERSIST_DIR="${OUTPUT_DIR}/persistence"
-ensure_dir "${PERSIST_DIR}" || { log_error "[40_persistence] Failed to create ${PERSIST_DIR}"; exit 1; }
+ensure_dir "${PERSIST_DIR}" || { log_error "[50_persistence] Failed to create ${PERSIST_DIR}"; exit 1; }
 
-log_info "[40_persistence] Starting persistence mechanism collection"
+log_info "[50_persistence] Starting persistence mechanism collection"
 
 # systemd units（systemdが存在する場合）
 if command -v systemctl &> /dev/null; then
@@ -122,5 +122,5 @@ safe_copy "/etc/profile" "${PERSIST_DIR}/"
 safe_copy "/etc/bash.bashrc" "${PERSIST_DIR}/"
 safe_copy "/etc/profile.d/" "${PERSIST_DIR}/profile.d/"
 
-log_success "[40_persistence] Persistence mechanism collection completed"
+log_success "[50_persistence] Persistence mechanism collection completed"
 exit 0

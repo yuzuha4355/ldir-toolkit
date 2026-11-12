@@ -6,7 +6,7 @@
 
 OUTPUT_DIR="${1:-}"
 if [[ -z "${OUTPUT_DIR}" ]]; then
-    echo "[ERROR] [30_auth] Missing output directory argument" >&2
+    echo "[ERROR] [40_auth] Missing output directory argument" >&2
     exit 1
 fi
 
@@ -15,9 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 AUTH_DIR="${OUTPUT_DIR}/config"
-ensure_dir "${AUTH_DIR}" || { log_error "[30_auth] Failed to create ${AUTH_DIR}"; exit 1; }
+ensure_dir "${AUTH_DIR}" || { log_error "[40_auth] Failed to create ${AUTH_DIR}"; exit 1; }
 
-log_info "[30_auth] Starting authentication information collection"
+log_info "[40_auth] Starting authentication information collection"
 
 # ユーザ・グループ情報
 log_info "Collecting user and group information"
@@ -67,5 +67,5 @@ w -h > "${AUTH_DIR}/w_output.txt" 2>&1
 # ログイン履歴分析
 last -Faixw > "${AUTH_DIR}/last_full.txt" 2>&1 || last -a > "${AUTH_DIR}/last_full.txt" 2>&1
 
-log_success "[30_auth] Authentication information collection completed"
+log_success "[40_auth] Authentication information collection completed"
 exit 0

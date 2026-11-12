@@ -150,7 +150,7 @@ docker exec -it ldir-ubuntu-test /bin/bash
 cd /opt/ldir-toolkit
 OUTPUT_DIR=/tmp/test_output
 mkdir -p $OUTPUT_DIR
-bash modules/20_logs.sh $OUTPUT_DIR
+bash modules/60_logs.sh $OUTPUT_DIR
 ```
 
 ## ディレクトリ構造

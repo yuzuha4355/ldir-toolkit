@@ -27,7 +27,9 @@ trap cleanup EXIT
 
 echo "== run (fast mode, with archive) =="
 rc=0
-LDIR_MODE=fast bash "${TOOLKIT}/ldir-collect.sh" --archive "${WORK}/out" > "${WORK}/stdout.txt" 2> "${WORK}/stderr.txt" || rc=$?
+# 秘匿値マスクの確認用に、トークンに見える環境変数を持たせて実行する
+CANARY="ldir-canary-$$-do-not-leak"
+SMOKE_TEST_API_TOKEN="${CANARY}" LDIR_MODE=fast bash "${TOOLKIT}/ldir-collect.sh" --archive "${WORK}/out" > "${WORK}/stdout.txt" 2> "${WORK}/stderr.txt" || rc=$?
 if [[ ${rc} -ne 0 ]]; then
     fail "collector exits 0 (got ${rc})" "$(tail -30 "${WORK}/stdout.txt" "${WORK}/stderr.txt")"
     finish; exit 1
@@ -66,11 +68,19 @@ check "extracted archive verifies from another path" bash -c "cd '${WORK}/moved'
 echo "== content =="
 for f in system/uname.txt system/kernel_version.txt config/passwd config/group \
          execution/running_processes.txt filesystem/proc_mounts.txt \
-         filesystem/etc_file_list.txt metadata/collection.log; do
+         filesystem/etc_file_list.txt metadata/collection.log \
+         kernel/security_sysctls.txt system/environment_variables.txt; do
     check "has ${f}" test -s "${D}/${f}"
 done
+check "kernel module records ld.so.preload state" bash -c "ls '${D}'/kernel/ld.so.preload* >/dev/null"
+check "containers module produced output" test -n "$(ls -A "${D}/containers")"
 check "fast mode leaves web module disabled" test -f "${D}/web/disabled.txt"
 check "fast mode leaves cloud metadata disabled" test -f "${D}/cloud_metadata/disabled.txt"
+
+echo "== secret redaction =="
+check "variable name is still recorded" grep -q '^SMOKE_TEST_API_TOKEN=<redacted:' "${D}/system/environment_variables.txt"
+check_not "secret value appears nowhere in the collection" grep -rqF "${CANARY}" "${D}"
+check "manifest records that redaction was on" grep -qx "Secret Redaction: 1" "${M}"
 
 echo "== hygiene =="
 check_not "collection does not list itself" grep -rqF "${D}" "${D}/filesystem"

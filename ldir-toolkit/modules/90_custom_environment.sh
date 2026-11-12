@@ -137,7 +137,7 @@ if [[ "${CONTAINER_TYPE:-none}" != "none" ]]; then
 
     if [[ "${CONTAINER_TYPE}" = "docker" ]]; then
         safe_copy "/.dockerenv" "${MOD_DIR}/container/dockerenv" || true
-        save_command_output "cat /proc/1/environ | tr '\\0' '\\n'" "${MOD_DIR}/container/docker_env.txt" || true
+        { tr '\0' '\n' < /proc/1/environ | redact_env > "${MOD_DIR}/container/docker_env.txt"; } 2>/dev/null || true
     fi
 fi
 
@@ -176,7 +176,7 @@ save_command_output "ss -tlnp" "${MOD_DIR}/custom_paths/listening_ports_ss.txt" 
 # 7. 環境変数（システム全体）
 ensure_dir "${MOD_DIR}/environment"
 
-save_command_output "env" "${MOD_DIR}/environment/current_env.txt" || true
+# 収集プロセスの環境変数は system/environment_variables.txt に 1 か所だけ保存する
 safe_copy "/etc/environment" "${MOD_DIR}/environment/etc_environment"
 safe_copy "/etc/profile" "${MOD_DIR}/environment/profile"
 safe_copy "/etc/profile.d/" "${MOD_DIR}/environment/profile.d"

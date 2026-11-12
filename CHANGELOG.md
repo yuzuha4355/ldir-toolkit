@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-12
+
+### Changed
+- **Collection order now follows the order of volatility.** Modules were renumbered; output directory names are unchanged
+  - `50_execution` -> `15_execution`, `60_network` -> `20_network`, `30_auth` -> `40_auth`, `40_persistence` -> `50_persistence`, `20_logs` -> `60_logs`
+- **Secret values in environment variables are masked by default** (`GH_TOKEN=<redacted:40 chars>`); names are kept. Applies to the collector's own environment, per-process `environ` (full mode), container PID 1 environment, and `docker inspect` output. Disable with `--no-redact` / `LDIR_REDACT_SECRETS=0`
+- The collector's own environment is saved once (`system/environment_variables.txt`); the duplicate under `custom_environment/` was removed
+- Repository layout flattened: the `ldir-toolkit-fresh/` level is gone
+- docker-test build context fixed (it expected a copy of the toolkit inside `docker-test/`)
+
+### Added
+- `25_kernel` module: loaded modules with taint flags, cross-check of `/proc/modules` against `/sys/module`, out-of-tree module files, eBPF programs/maps/links, `/etc/ld.so.preload`, file capabilities, security-relevant sysctls, LSM / lockdown / Secure Boot state, dmesg
+- `30_containers` module: Docker and Podman (containers, images, networks, inspect, diff, risk summary), CRI (`crictl`), Kubernetes node files (static pod manifests, kubelet config), runtime sockets and privileged groups
+- `docs/SPECIFICATION.md` (仕様書) and `docs/PROCEDURE.md` (手順書)
+- `make dist` builds `dist/ldir-toolkit-vX.Y.Z.tar.gz` with a `.sha256`
+- `LDIR_CONTAINER_TIMEOUT`
+
+### Removed
+- Duplicated and outdated documents (`QUICKSTART.md`, `README_EXTENDED.txt`, `DISTRIBUTION_GUIDE.txt`, the Japanese README inside `ldir-toolkit/`), replaced by the two documents above
+
 ## [0.2.2] - 2026-11-11
 
 ### Fixed

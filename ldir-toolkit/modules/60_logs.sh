@@ -6,7 +6,7 @@
 
 OUTPUT_DIR="${1:-}"
 if [[ -z "${OUTPUT_DIR}" ]]; then
-    echo "[ERROR] [20_logs] Missing output directory argument" >&2
+    echo "[ERROR] [60_logs] Missing output directory argument" >&2
     exit 1
 fi
 
@@ -15,9 +15,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 
 LOG_DIR="${OUTPUT_DIR}/logs"
-ensure_dir "${LOG_DIR}" || { log_error "[20_logs] Failed to create ${LOG_DIR}"; exit 1; }
+ensure_dir "${LOG_DIR}" || { log_error "[60_logs] Failed to create ${LOG_DIR}"; exit 1; }
 
-log_info "[20_logs] Starting log collection"
+log_info "[60_logs] Starting log collection"
 
 # systemd journal（存在する場合）
 if command -v journalctl &> /dev/null; then
@@ -93,5 +93,5 @@ safe_copy "/var/log/mail.err" "${LOG_DIR}/"
 safe_copy "/var/log/ufw.log" "${LOG_DIR}/"
 safe_copy "/var/log/firewalld" "${LOG_DIR}/"
 
-log_success "[20_logs] Log collection completed"
+log_success "[60_logs] Log collection completed"
 exit 0

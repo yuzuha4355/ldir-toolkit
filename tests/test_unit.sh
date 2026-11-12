@@ -55,6 +55,32 @@ save_command_output "echo hello" "${WORK}/cmd/out.txt"
 check "writes output and creates parent dir" grep -qx hello "${WORK}/cmd/out.txt"
 check_not "failing command returns non-zero" save_command_output "false" "${WORK}/cmd/fail.txt"
 
+echo "== redact_env =="
+red() { printf '%s\n' "$1" | redact_env; }
+check "masks *_TOKEN values" test "$(red 'GH_TOKEN=abc123')" = 'GH_TOKEN=<redacted:6 chars>'
+check "masks *_SECRET_ACCESS_KEY values" test "$(red 'AWS_SECRET_ACCESS_KEY=x y')" = 'AWS_SECRET_ACCESS_KEY=<redacted:3 chars>'
+check "masks lower-case names" test "$(red 'db_password=hunter2')" = 'db_password=<redacted:7 chars>'
+check "keeps ordinary variables" test "$(red 'LANG=C.UTF-8')" = 'LANG=C.UTF-8'
+check "keeps MAX_TOKENS (a count, not a token)" test "$(red 'MAX_TOKENS=4096')" = 'MAX_TOKENS=4096'
+check "keeps LDIR_REDACT_SECRETS" test "$(red 'LDIR_REDACT_SECRETS=1')" = 'LDIR_REDACT_SECRETS=1'
+check "masks TOKEN in the middle of a name" test "$(red 'MY_TOKEN_VALUE=abc')" = 'MY_TOKEN_VALUE=<redacted:3 chars>'
+check "masks plural *_SECRETS" test "$(red 'CLIENT_SECRETS=x')" = 'CLIENT_SECRETS=<redacted:1 chars>'
+check "keeps PWD" test "$(red 'PWD=/root')" = 'PWD=/root'
+check "keeps OLDPWD" test "$(red 'OLDPWD=/tmp')" = 'OLDPWD=/tmp'
+check "keeps SSH_AUTH_SOCK" test "$(red 'SSH_AUTH_SOCK=/run/agent.sock')" = 'SSH_AUTH_SOCK=/run/agent.sock'
+check "keeps XDG_SESSION_ID" test "$(red 'XDG_SESSION_ID=42')" = 'XDG_SESSION_ID=42'
+check "keeps empty secret as-is" test "$(red 'MY_PASSWORD=')" = 'MY_PASSWORD='
+check "masks credentials inside URLs" test "$(red 'HTTPS_PROXY=http://bob:hunter2@proxy:3128/')" = 'HTTPS_PROXY=http://bob:<redacted>@proxy:3128/'
+check "keeps URLs without credentials" test "$(red 'HTTP_PROXY=http://proxy:3128/')" = 'HTTP_PROXY=http://proxy:3128/'
+check "masks docker-inspect style Env entries" test "$(red '    "DB_PASSWORD=s3cret",')" = '    "DB_PASSWORD=<redacted:6 chars>",'
+check "keeps non-secret Env entries" test "$(red '    "PATH=/bin"')" = '    "PATH=/bin"'
+check "passes through non-assignment lines" test "$(red 'just some text')" = 'just some text'
+check "LDIR_REDACT_SECRETS=0 disables masking" test "$(printf 'GH_TOKEN=abc\n' | LDIR_REDACT_SECRETS=0 redact_env)" = 'GH_TOKEN=abc'
+
+echo "== run_limited =="
+check "runs a command" run_limited 5 true
+check_not "propagates failure" run_limited 5 false
+
 echo "== distro detection =="
 # shellcheck source=ldir-toolkit/lib/detect_distro_advanced.sh
 source "${TOOLKIT}/lib/detect_distro_advanced.sh"
@@ -88,6 +114,14 @@ check_not "unknown option is rejected" bash "${COLLECT}" --no-such-option
 check_not "invalid mode is rejected" bash "${COLLECT}" --mode bogus "${WORK}/x"
 check_not "unknown option creates no directory" test -e "${WORK}/--no-such-option"
 check "--list-modules lists numbered modules" bash -c "bash '${COLLECT}' --list-modules | grep -q '^10_system_info.sh$'"
+order="$(bash "${COLLECT}" --list-modules | tr '\n' ' ')"
+check "volatile data first: execution and network run before logs and filesystem" \
+    bash -c "[[ '${order}' == *execution*network*logs*filesystem* ]]"
+dupes="$(bash "${COLLECT}" --list-modules | cut -c1-2 | sort | uniq -d)"
+check "module number prefixes are unique" test -z "${dupes}"
+for m in "${TOOLKIT}"/modules/*.sh; do
+    check "module is listed in the specification: ${m##*/}" grep -q "${m##*/}" "${HERE}/../docs/SPECIFICATION.md"
+done
 
 echo "== version consistency =="
 ver="$(bash "${COLLECT}" --version | awk '{print $2}')"

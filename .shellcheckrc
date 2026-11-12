@@ -1,0 +1,2 @@
+# モジュールは lib/common.sh を実行時のパスで source する
+external-sources=true
