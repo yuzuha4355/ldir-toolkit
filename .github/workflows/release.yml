@@ -1,0 +1,73 @@
+name: Release
+
+# main に入ったバージョンのリリースがまだ無ければ、配布物を作って公開する。
+# バージョンは ldir-toolkit/ldir-collect.sh の LDIR_VERSION、
+# リリースノートは CHANGELOG.md の該当節から取る。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        run: |
+          version="$(bash ldir-toolkit/ldir-collect.sh --version | awk '{print $2}')"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v${version} already exists; nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build archive (runs lint and unit tests)
+        if: steps.ver.outputs.exists == 'false'
+        run: make dist
+
+      - name: Smoke test the packaged collector
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          mkdir -p /tmp/pkg && tar -xzf "dist/ldir-toolkit-v${{ steps.ver.outputs.version }}.tar.gz" -C /tmp/pkg
+          sudo bash "/tmp/pkg/ldir-toolkit-v${{ steps.ver.outputs.version }}/ldir-collect.sh" /tmp/pkg/out > /dev/null
+          cd /tmp/pkg/out/* && sudo sha256sum -c metadata/file_hashes.txt > /dev/null
+
+      - name: Publish release
+        if: steps.ver.outputs.exists == 'false'
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          cd dist
+          # 版数に依らない固定名のコピー（releases/latest/download/ から取得できる）
+          cp "ldir-toolkit-v${version}.tar.gz" ldir-toolkit-latest.tar.gz
+          sha256sum ldir-toolkit-latest.tar.gz > ldir-toolkit-latest.tar.gz.sha256
+          cp ../docs/SPECIFICATION.md ../docs/PROCEDURE.md .
+          awk -v v="${version}" '
+            $0 ~ "^## \\[" v "\\]" { found = 1; next }
+            /^## \[/               { found = 0 }
+            found' ../CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md" > notes.md
+          gh release create "v${version}" \
+            --target "${GITHUB_SHA}" \
+            --title "LDIR-Toolkit v${version}" \
+            --notes-file notes.md \
+            --latest \
+            "ldir-toolkit-v${version}.tar.gz" \
+            "ldir-toolkit-v${version}.tar.gz.sha256" \
+            ldir-toolkit-latest.tar.gz \
+            ldir-toolkit-latest.tar.gz.sha256 \
+            SPECIFICATION.md \
+            PROCEDURE.md

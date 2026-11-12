@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docs/SPECIFICATION.md` (仕様書) and `docs/PROCEDURE.md` (手順書)
 - `make dist` builds `dist/ldir-toolkit-vX.Y.Z.tar.gz` with a `.sha256`
 - `LDIR_CONTAINER_TIMEOUT`
+- Release workflow: merging a new version to `main` publishes the archive, checksums and both documents as a GitHub release
 
 ### Removed
 - Duplicated and outdated documents (`QUICKSTART.md`, `README_EXTENDED.txt`, `DISTRIBUTION_GUIDE.txt`, the Japanese README inside `ldir-toolkit/`), replaced by the two documents above

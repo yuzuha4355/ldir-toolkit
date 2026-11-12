@@ -55,28 +55,27 @@ sudo ./ldir-collect.sh --mode full /tmp/ldir_output
 sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 ```
 
-### Installation
+### Download
+
+Latest release: <https://github.com/yuzuha4355/ldir-toolkit/releases/latest>
 
 ```bash
-wget https://github.com/yuzuha4355/ldir-toolkit/releases/download/v0.3.0/ldir-toolkit-v0.3.0.tar.gz
-tar -xzf ldir-toolkit-v0.3.0.tar.gz
-cd ldir-toolkit-v0.3.0
+wget https://github.com/yuzuha4355/ldir-toolkit/releases/latest/download/ldir-toolkit-latest.tar.gz
+wget https://github.com/yuzuha4355/ldir-toolkit/releases/latest/download/ldir-toolkit-latest.tar.gz.sha256
+sha256sum -c ldir-toolkit-latest.tar.gz.sha256
+tar -xzf ldir-toolkit-latest.tar.gz
+cd ldir-toolkit-v*/
 ```
+
+Each release also carries the versioned archive (`ldir-toolkit-vX.Y.Z.tar.gz`) and the two documents:
+[PROCEDURE.md](https://github.com/yuzuha4355/ldir-toolkit/releases/latest/download/PROCEDURE.md) (手順書),
+[SPECIFICATION.md](https://github.com/yuzuha4355/ldir-toolkit/releases/latest/download/SPECIFICATION.md) (仕様書).
 
 ### Usage
 
 ```bash
-# Collect data (requires root)
-sudo ./ldir-collect.sh /tmp/ldir_output
-
-# Archive results
-tar -czf ldir_result_$(hostname)_$(date +%Y%m%d_%H%M%S).tar.gz /tmp/ldir_output/
-```
-
-### Verification
-
-```bash
-sha256sum -c ldir-toolkit-v0.3.0.tar.gz.sha256
+# Collect data (requires root); --archive also writes a tar.gz and its checksum
+sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 ```
 
 ---
@@ -184,8 +183,8 @@ See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ### Direct execution on target server
 ```bash
-tar -xzf ldir-toolkit-v0.3.0.tar.gz
-cd ldir-toolkit-v0.3.0
+tar -xzf ldir-toolkit-latest.tar.gz
+cd ldir-toolkit-v*/
 sudo ./ldir-collect.sh /tmp/ldir_output
 tar -czf ldir_result_$(hostname)_$(date +%Y%m%d_%H%M%S).tar.gz /tmp/ldir_output/
 ```
@@ -307,6 +306,7 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 - Modules are discovered automatically: drop `NN_name.sh` into `ldir-toolkit/modules/` and it runs in numeric order. The number encodes volatility order, and every module must be listed in `docs/SPECIFICATION.md` (a unit test checks this). Each module receives the collection directory as `$1`.
 - Use `safe_copy`, `save_command_output`, `log_*` from `lib/common.sh`. A missing source file is expected and logged as DEBUG; `log_warn` is for things that should have worked.
+- Releasing: bump `LDIR_VERSION` in `ldir-collect.sh`, add the CHANGELOG entry, merge to `main`. `.github/workflows/release.yml` then builds and publishes the release if that version has none yet.
 - CI (`.github/workflows/ci.yml`) runs lint, unit tests, and the smoke test inside containers for several distributions.
 
 ---
