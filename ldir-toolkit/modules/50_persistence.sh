@@ -99,7 +99,14 @@ done
 
 # LD_PRELOAD悪用の検出
 log_info "Scanning for LD_PRELOAD references"
-grep -r "LD_PRELOAD" /etc/ > "${PERSIST_DIR}/ld_preload_references.txt" 2>/dev/null || echo "No LD_PRELOAD references found" > "${PERSIST_DIR}/ld_preload_references.txt"
+# 実機では /etc の全文検索に数十秒かかることがある。上限を設け、打ち切った場合は記録する
+run_limited 60 grep -r "LD_PRELOAD" /etc/ > "${PERSIST_DIR}/ld_preload_references.txt" 2>/dev/null
+case $? in
+    0) ;;
+    1) echo "No LD_PRELOAD references found" > "${PERSIST_DIR}/ld_preload_references.txt" ;;
+    124) log_warn "[50_persistence] LD_PRELOAD scan of /etc hit the 60s limit; result is partial" ;;
+    *) [[ -s "${PERSIST_DIR}/ld_preload_references.txt" ]] || echo "No LD_PRELOAD references found" > "${PERSIST_DIR}/ld_preload_references.txt" ;;
+esac
 
 # 環境変数での永続化
 env | grep -E "(LD_PRELOAD|LD_LIBRARY_PATH)" > "${PERSIST_DIR}/env_preload.txt" 2>&1 || echo "No suspicious env vars" > "${PERSIST_DIR}/env_preload.txt"

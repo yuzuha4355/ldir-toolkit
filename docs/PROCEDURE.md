@@ -1,6 +1,6 @@
 # LDIR-Toolkit 収集手順書
 
-対象バージョン: 0.3.0
+対象バージョン: 0.3.1
 
 インシデント対応の初動で、対象ホストから収集を行い、収集物を引き渡すまでの手順です。
 ツールの仕様は [SPECIFICATION.md](SPECIFICATION.md) を参照してください。
@@ -50,11 +50,11 @@
 調査用の端末で行います。
 
 ```bash
-sha256sum -c ldir-toolkit-v0.3.0.tar.gz.sha256
+sha256sum -c ldir-toolkit-v0.3.1.tar.gz.sha256
 ```
 
 ```bash
-tar -xzf ldir-toolkit-v0.3.0.tar.gz
+tar -xzf ldir-toolkit-v0.3.1.tar.gz
 ```
 
 リポジトリから配布物を作る場合:
@@ -92,13 +92,13 @@ sudo mount /dev/sdX1 /mnt/ldir
 **転送する場合**
 
 ```bash
-scp ldir-toolkit-v0.3.0.tar.gz <ユーザー>@<対象ホスト>:/tmp/
+scp ldir-toolkit-v0.3.1.tar.gz <ユーザー>@<対象ホスト>:/tmp/
 ```
 
 対象ホスト上で展開します。
 
 ```bash
-cd /tmp && tar -xzf ldir-toolkit-v0.3.0.tar.gz
+cd /tmp && tar -xzf ldir-toolkit-v0.3.1.tar.gz
 ```
 
 SSH でログインすること自体が、認証ログとログイン履歴に記録されます。ログイン時刻を控えておきます。
@@ -116,7 +116,7 @@ fast で数百 MB、full で数 GB を見込みます。
 ### 3.1 実行（fast・アーカイブ付き）
 
 ```bash
-cd /mnt/ldir/ldir-toolkit-v0.3.0
+cd /mnt/ldir/ldir-toolkit-v0.3.1
 ```
 
 ```bash
@@ -286,7 +286,7 @@ gpg --symmetric --cipher-algo AES256 <ホスト名>_<日時>.tar.gz
 対象ホストのディスクにツールや収集物を置いた場合は、持ち出しと検証が済んでから削除します。
 
 ```bash
-sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.0 /tmp/ldir-toolkit-v0.3.0.tar.gz
+sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.1 /tmp/ldir-toolkit-v0.3.1.tar.gz
 ```
 
 削除したパスと時刻を記録します。作業終了時刻を記録し、記録を締めます。

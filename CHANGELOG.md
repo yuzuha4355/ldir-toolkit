@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-13
+
+Measured on a GitHub-hosted runner VM (systemd and Docker running, large `/opt` and `/usr/local`), where fast mode took 231 seconds.
+
+### Fixed
+- `25_kernel` took 155s in fast mode: `getcap -r` walked `/usr/lib`, `/opt`, `/home` and `/usr/local`, and the BPF fd scan started one `readlink` per open file descriptor. Fast mode now checks binary directories and temp areas only (full mode still scans `/`), and fds are listed with a single `ls`. Measured after the change: 2s
+- `70_filesystem` walked the same trees twice, once for SUID/SGID and once for world-writable files (about 150s on that host with a cold cache). Both lists now come from one traversal
+- `50_persistence`: the `LD_PRELOAD` text search of `/etc` is limited to 60s; a cut-off is reported as a WARN
+
+### Added
+- CI runs the smoke test on the runner host as well as in containers, and prints per-module timings and the timestamped progress log
+
 ## [0.3.0] - 2026-11-12
 
 ### Changed

@@ -16,7 +16,7 @@ export PATH
 # NOTE: 変数名を VERSION にしないこと。/etc/os-release も VERSION を定義しており、
 #       source されると上書きされる（v0.2.1 でマニフェストに OS のバージョンが
 #       記録されていた原因）。
-LDIR_VERSION="0.3.0"
+LDIR_VERSION="0.3.1"
 export LDIR_VERSION
 
 # スクリプトディレクトリ取得（先に確定）

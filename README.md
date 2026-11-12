@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -318,5 +318,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.3.0  
+**Version**: 0.3.1  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

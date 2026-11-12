@@ -47,30 +47,50 @@ fi
 find /tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
 find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
 
-# SUID/SGID ファイル（権限昇格に悪用される可能性）
-log_info "Finding SUID/SGID files"
-if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_debug "find reported errors during SUID/SGID search"
+# SUID/SGID ファイル（権限昇格に悪用される可能性）と
+# ワールドライタブルファイル（脆弱性の可能性）
+#
+# 走査は 1 回にまとめる。別々に find を回すと同じツリーを 2 度歩くことになり、
+# /opt や /usr/local が大きい実機では 1 回あたり 1 分以上かかる。
+# 1) どちらかの条件に当たるファイルの候補を 1 回の走査で集める
+# 2) 候補（少数）だけを条件ごとに振り分ける
+log_info "Finding SUID/SGID and world-writable files"
 
-    # ワールドライタブルファイル（脆弱性の可能性）
-    log_info "Finding world-writable files"
-    find / "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+PERM_CANDIDATES="${FS_DIR}/.perm_candidates.tmp"
+: > "${PERM_CANDIDATES}"
+if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
+        >> "${PERM_CANDIDATES}" 2>/dev/null || log_debug "find reported errors during permission search"
 else
     # fast mode: focus on common abuse paths
-    {
-        for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
-            [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" 2>/dev/null
-        done
-    } > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || true
-
-    {
-        for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
-            [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" 2>/dev/null
-        done
-    } > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+    for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
+        [[ -e "$p" ]] || continue
+        find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
+            >> "${PERM_CANDIDATES}" 2>/dev/null || true
+    done
 fi
+
+# classify_candidates <出力ファイル> <find の条件...>
+# 候補を 200 件ずつ find に渡し、条件に合うものだけ詳細表示する
+classify_candidates() {
+    local out="$1"; shift
+    local batch=() f
+    : > "$out"
+    while IFS= read -r -d '' f; do
+        batch+=("$f")
+        if [[ ${#batch[@]} -ge 200 ]]; then
+            find "${batch[@]}" -maxdepth 0 "$@" "${LDIR_FIND_LS[@]}" >> "$out" 2>/dev/null || true
+            batch=()
+        fi
+    done < "${PERM_CANDIDATES}"
+    if [[ ${#batch[@]} -gt 0 ]]; then
+        find "${batch[@]}" -maxdepth 0 "$@" "${LDIR_FIND_LS[@]}" >> "$out" 2>/dev/null || true
+    fi
+}
+
+classify_candidates "${FS_DIR}/suid_sgid_files.txt" \( -perm -4000 -o -perm -2000 \)
+classify_candidates "${FS_DIR}/world_writable_files.txt" -perm -0002
+rm -f "${PERM_CANDIDATES}"
 
 # 隠しファイル（ドットファイル）
 log_info "Finding hidden files in sensitive directories"
