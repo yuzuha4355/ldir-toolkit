@@ -60,11 +60,14 @@ copy_config_tree "/etc/ssh" "${AUTH_DIR}/ssh" "${AUTH_DIR}/excluded_files.txt" 0
 
 # 実際に効いている sshd の設定（Include / sshd_config.d を反映した値）。
 # AuthorizedKeysFile や HostKey の場所はここから読む
+# sshd -T は sshd が動いていないホスト（ソケット起動で /run/sshd が無い等）では失敗する。
+# その場合は下で設定ファイルを直接読むので WARN にはせず、理由をファイルに残す。
 SSHD_EFFECTIVE="${AUTH_DIR}/sshd_effective_config.txt"
-if have_cmd sshd; then
-    capture "${SSHD_EFFECTIVE}" sshd -T
-elif [[ -x /usr/sbin/sshd ]]; then
-    capture "${SSHD_EFFECTIVE}" /usr/sbin/sshd -T
+SSHD_BIN=""
+if have_cmd sshd; then SSHD_BIN="sshd"; elif [[ -x /usr/sbin/sshd ]]; then SSHD_BIN="/usr/sbin/sshd"; fi
+if [[ -n "${SSHD_BIN}" ]] && ! capture_try "${SSHD_EFFECTIVE}" "${SSHD_BIN}" -T; then
+    echo "# sshd -T failed (output above). AuthorizedKeysFile was read from sshd_config and sshd_config.d instead (Match blocks not evaluated)." >> "${SSHD_EFFECTIVE}"
+    log_debug "[40_auth] sshd -T failed; falling back to the config files"
 fi
 
 # AuthorizedKeysFile の値（%h %u %% と ~ を含み得る。相対パスはホームからの相対）。

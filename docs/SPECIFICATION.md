@@ -401,7 +401,7 @@ LXC / LXD / Incus / Proxmox VE のコンテナは `virtualization/` が扱いま
 `user_ssh/<ユーザー>/`（`authorized_keys` `authorized_keys2` `known_hosts` `config` `rc` `environment`、`ssh_dir_listing.txt`、`AuthorizedKeysFile` が既定以外を指す場合はその鍵ファイル `authorized_keys_file__<パス>`）
 `who_all.txt` `last_full.txt` `excluded_files.txt`
 
-`AuthorizedKeysFile` は `sshd -T` から読みます（`%h` `%u` `%%` `~` を展開し、相対パスはホームからの相対）。`sshd -T` が使えない場合は設定ファイルを直接読みます。
+`AuthorizedKeysFile` は `sshd -T` から読みます（`%h` `%u` `%%` `~` を展開し、相対パスはホームからの相対）。`sshd -T` が使えない・失敗した場合（ソケット起動で `/run/sshd` が無い等）は設定ファイルを直接読み、その旨を `sshd_effective_config.txt` の末尾に書きます（WARN にはしない）。
 
 ### 7.8 `persistence/`
 
