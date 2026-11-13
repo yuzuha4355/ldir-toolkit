@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-13
+
+Log collection with a chosen period and a size cap, a virtualization module, and fixes for artifacts that looked collected but were not.
+
+### Changed — output paths and behaviour existing users will notice
+- **`logs/journal_7days.txt` is renamed `logs/journal_period.txt`.** It now covers the log period (30 days by default, `--log-days`). In full mode without `--log-days` there is no period and the export is `logs/journal_full.txt` as before
+- **`journal_ssh.txt`, `journal_sshd.txt`, `journal_cron.txt` and `journal_errors.txt` are limited to the log period.** Up to 0.3.2 they covered the whole journal. `journal_cron.txt` now also includes the RHEL unit `crond`
+- **Rotated logs are collected.** `auth.log`, `secure`, `syslog`, `messages`, `kern.log`, `wtmp`, `btmp` and the package, web server, database, mail and firewall logs are taken with their rotations (`.1`, `.2.gz`, `-YYYYMMDD`) when modified within the period. Compressed files are copied as they are
+- **Log files keep their original names.** On RHEL-family hosts `/var/log/secure` was copied twice, once as `logs/auth.log`; it is now only `logs/secure` (and its rotations). Debian's `logs/auth.log` is unchanged
+- **Web server and database log directories are no longer copied whole.** `logs/nginx/`, `logs/apache2/`, `logs/httpd/`, `logs/mysql/`, `logs/postgresql/` keep their layout but only hold files from the period, up to the cap
+- **Audit logs moved from `execution/` to `logs/`**: `execution/audit/` → `logs/audit/`, `execution/audit_execve.txt`, `audit_user_cmd.txt`, `audit_recent.txt` → `logs/`. They follow the period and the cap; `ausearch` gets `--start`. The move also keeps the volatile-first module from spending time on large copies
+- `logs/apt/` holds `history.log*` and `term.log*` only (no `eipp.log.xz`)
+- Package manager logs are no longer duplicated under `custom_environment/packages/` (they are in `logs/`, period-limited)
+- LXC moved from `containers/lxc/lxc-ls.txt` to `virtualization/host/lxc/`. `containers/privileged_groups.txt` lists `docker` and `podman` only; `lxd` and `incus` are in `virtualization/privileged_groups.txt`. `containers/no_container_runtime.txt` now points to `virtualization/`
+- **Per-user artifacts follow the user database**, not `/root` and `/home/*` only: command history, SSH, user systemd units, autostart, shell init files, browser data and `~/.config`. Directories are named after the user name. A home under `/root` or `/home` with no passwd entry is labelled `orphan-home_<name>`
+- `persistence/shell_init/<user>/` is created only for users that have such files (it used to be created, empty, for every home)
+- History files are copied with their modification time (`cp -a`); 0.3.2 used plain `cp`
+- Single files that are symbolic links (`/etc/resolv.conf`, `/etc/os-release`, `/etc/rc.local` on RHEL, ...) are copied as the content of their target, and the link is recorded in `_symlinks.txt` next to the copy. Up to 0.3.2 the collection held a dangling relative link, which was not hashed either
+- Fast-mode SUID/SGID and world-writable search also covers `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin` (when not links into `/usr`) and `/usr/libexec`, before `/usr/local` and `/opt`
+- Commands whose failure was silently ignored now report it: `iptables*`, `ip6tables`, `nft`, `ufw`, `bpftool`, `dmesg` (WARN on a host, DEBUG inside a container), `lscpu`, `lsblk`, `lsmod`, `ip route show table all`, `atq`, `docker/podman --version`, `kubelet` journal. `lsof`, `sysctl -a`, `mokutil` and `firewall-cmd` exit codes are interpreted (no WARN for "nothing found" or "firewalld not running")
+- `--no-redact` also turns off the new masking of VM definitions and hypervisor configuration
+
+### Added
+- `--log-days 30|60|90` / `LDIR_LOG_DAYS` (default 30; any other value exits with status 1) and `--log-max-mb N` / `LDIR_LOG_MAX_MB` (default 100 MB per log group, 0 = no cap). Full mode has no period and no cap unless these are given. Both are recorded in the manifest (`Log Days`, `Log Since`, `Log Size Cap`)
+- `logs/log_summary.txt` (per log group: `collected`, `capped`, `none_in_period`, `not_present`, `symlink_only`, `copy_failed`) and `logs/log_inventory.tsv` (every file and its decision, including the files not collected because of the cap)
+- Binary journal files (`logs/journal/`, `logs/run_log/journal/`), `logs/journal_auth.txt` (auth/authpriv facility: on hosts without rsyslog this is the only authentication record), `/var/log/cron*` (RHEL), `maillog*`, `boot.log*`, `mariadb/`, `mongodb/`, `redis/`, `lighttpd/`, RHEL PostgreSQL logs under `/var/lib/pgsql`, and `logs/var_log_listing.txt`
+- `35_virtualization` module (`virtualization/`): whether this host is a VM and why (also in the manifest as `Virtualization`), guest and cloud agents that can run commands in the guest, and on hypervisor hosts libvirt (VMs, networks, pools, snapshots, definitions, logs), Proxmox VE (`/etc/pve`, task logs, API access log), LXC, LXD / Incus (read from the API socket), VirtualBox, Xen dom0, running hypervisor processes. A WARN flags QEMU running outside libvirt and Proxmox. Disk images and memory state are listed, never copied. `LDIR_VIRT_TIMEOUT`, `LDIR_VIRT_BUDGET`
+- Masking for configuration files (`redact_config`): VNC/SPICE passwords, cloud-init user-data, LXD `environment.*`, Proxmox `cipassword`, QEMU secret objects, URL credentials
+- `config/user_homes.tsv`, `config/getent_passwd.txt`, `config/getent_group.txt`, `config/sshd_effective_config.txt` (`sshd -T`), `authorized_keys2`, `~/.ssh/rc`, `~/.ssh/environment`, `ssh_dir_listing.txt`, and key files named by `AuthorizedKeysFile`
+- History: ash, sh, ksh, fish, `.python_history`, `.mysql_history`, `.psql_history`, `.sqlite_history`, `.rediscli_history`, `.node_repl_history`, `.irb_history`, `.dbshell`, `.lesshst`, `.viminfo`, `.wget-hsts` (`execution/user_history/<user>/`)
+- Persistence: `/usr/local/lib/systemd/system`, transient units (`/run/systemd/transient`), `/run/systemd/system`, `/etc/systemd/user`, systemd generators, `/etc/anacrontab`, `cron.allow` / `cron.deny`, RHEL `/etc/bashrc`, zsh and csh system files, `/etc/environment`, more per-user shell init files
+- `hosts.allow` / `hosts.deny`, `sudo.conf`, `doas.conf`
+
+### Fixed
+- **On BusyBox (Alpine) a scan cut off by the fast-mode time budget was not marked partial.** BusyBox `timeout` exits with 143, not 124; `run_limited` now reports 124 for both, so `scan_incomplete.txt` and the `# PARTIAL RESULT` note appear as intended
+- **`docker inspect` failures left an empty `<ID>.json`** that read as "collected". A failure now leaves `<ID>.inspect_failed.txt` and a WARN; `diff` and `logs` failures are counted per kind
+- The unit test that rejects unchecked `cmd > file 2>&1` missed lines ending in `|| true`; it now catches them (deliberate exceptions carry `# ldir:allow`)
+- README: the module table was truncated
+
+### Security
+- **Private keys are detected by content and never written to the output.** Up to 0.3.2, `/etc/ssh` was copied and `ssh_host_*_key` deleted afterwards, which left the deleted keys recoverable on the output medium, and host keys with other names (`HostKey` in `sshd_config`) were collected. `/etc/containers/auth.json` had the same copy-then-delete pattern. Excluded paths are listed in `excluded_files.txt`
+- Key stores are not collected: `/etc/libvirt/secrets`, `/etc/pve/priv`, `*.key`, `*.keyring`, `*.pw` and similar under the copied configuration trees
+
 ## [0.3.2] - 2026-11-13
 
 Fixes from an independent review of v0.3.1.

@@ -26,13 +26,12 @@ if [[ "${LDIR_ENABLE_WEB:-1}" != "1" ]]; then
     exit 0
 fi
 
-for user_home in /root /home/*; do
-    if [[ ! -d "$user_home" ]]; then
+# ホームは passwd から（/root と /home/* 以外も対象）
+while IFS=$'\t' read -r username user_home _; do
+    if [[ -z "$user_home" || ! -d "$user_home" ]]; then
         continue
     fi
-    
-    username="$(basename "$user_home")"
-    log_info "Collecting browser data for user: ${username}"
+    log_debug "Checking browser data for user: ${username}"
     
     # Firefox
     if [[ -d "${user_home}/.mozilla/firefox/" ]]; then
@@ -155,8 +154,8 @@ for user_home in /root /home/*; do
             fi
         done
     fi
-    
-done
+
+done < <(ldir_user_homes)
 
 log_success "[80_web] Web browser artifacts collection completed"
 exit 0

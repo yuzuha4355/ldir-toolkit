@@ -33,7 +33,7 @@ if [[ -r /proc/modules ]]; then
     cat /proc/modules > "${K_DIR}/proc_modules.txt" 2>/dev/null || true
 fi
 if have_cmd lsmod; then
-    lsmod > "${K_DIR}/lsmod.txt" 2>&1 || true
+    capture "${K_DIR}/lsmod.txt" lsmod
 fi
 
 # taint: 0 以外は、署名なし/ツリー外モジュールのロード等があったことを示す
@@ -104,11 +104,12 @@ safe_copy "/etc/ld.so.conf.d/" "${K_DIR}/ld.so.conf.d/"
 # --- eBPF ---
 log_info "Collecting eBPF state"
 if have_cmd bpftool; then
-    run_limited 20 bpftool prog show > "${K_DIR}/bpf_progs.txt" 2>&1 || true
-    run_limited 20 bpftool map show > "${K_DIR}/bpf_maps.txt" 2>&1 || true
-    run_limited 20 bpftool link show > "${K_DIR}/bpf_links.txt" 2>&1 || true
-    run_limited 20 bpftool net show > "${K_DIR}/bpf_net.txt" 2>&1 || true
-    run_limited 20 bpftool cgroup tree > "${K_DIR}/bpf_cgroup_tree.txt" 2>&1 || true
+    # 失敗すると eBPF の一覧が取れていない。コンテナ内では権限が無いのが普通
+    capture_host "${K_DIR}/bpf_progs.txt" run_limited 20 bpftool prog show
+    capture_host "${K_DIR}/bpf_maps.txt" run_limited 20 bpftool map show
+    capture_host "${K_DIR}/bpf_links.txt" run_limited 20 bpftool link show
+    capture_host "${K_DIR}/bpf_net.txt" run_limited 20 bpftool net show
+    capture_host "${K_DIR}/bpf_cgroup_tree.txt" run_limited 20 bpftool cgroup tree
 else
     echo "bpftool not installed; eBPF programs could not be enumerated" > "${K_DIR}/bpf_unavailable.txt"
 fi
@@ -148,7 +149,8 @@ fi
 # --- カーネル設定・状態 ---
 log_info "Collecting kernel settings"
 if have_cmd sysctl; then
-    sysctl -a > "${K_DIR}/sysctl_all.txt" 2>/dev/null || true
+    # 読めないキーがあると非 0 で終わるが、残りは出力される
+    capture_partial "${K_DIR}/sysctl_all.txt" sysctl -a
 fi
 safe_copy "/etc/sysctl.conf" "${K_DIR}/sysctl.conf"
 safe_copy "/etc/sysctl.d/" "${K_DIR}/sysctl.d/"
@@ -167,12 +169,14 @@ safe_copy "/etc/sysctl.d/" "${K_DIR}/sysctl.d/"
 [[ -r /sys/kernel/security/lsm ]] && cat /sys/kernel/security/lsm > "${K_DIR}/lsm.txt" 2>/dev/null
 [[ -r /sys/kernel/security/lockdown ]] && cat /sys/kernel/security/lockdown > "${K_DIR}/lockdown.txt" 2>/dev/null
 if have_cmd mokutil; then
-    mokutil --sb-state > "${K_DIR}/secure_boot.txt" 2>&1 || true
+    # EFI でないホストでは理由を出力して非 0 で終わる（状態の記録としてはそれで足りる）
+    capture_partial "${K_DIR}/secure_boot.txt" mokutil --sb-state
 fi
 
 # カーネルログ
 if have_cmd dmesg; then
-    dmesg -T > "${K_DIR}/dmesg.txt" 2>/dev/null || dmesg > "${K_DIR}/dmesg.txt" 2>&1 || true
+    # -T（時刻表示）は BusyBox に無い。dmesg_restrict やコンテナでは読めないことがある
+    capture_try "${K_DIR}/dmesg.txt" dmesg -T || capture_host "${K_DIR}/dmesg.txt" dmesg
 fi
 
 log_success "[25_kernel] Kernel information collection completed"

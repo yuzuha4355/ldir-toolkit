@@ -28,7 +28,7 @@ safe_copy "/etc/fstab" "${FS_DIR}/fstab.txt"
 # ディスク情報
 capture "${FS_DIR}/disk_usage_human.txt" df -h
 capture "${FS_DIR}/disk_inode_usage.txt" df -i
-lsblk -f > "${FS_DIR}/block_devices_filesystems.txt" 2>&1 || true
+capture "${FS_DIR}/block_devices_filesystems.txt" lsblk -f
 
 # 最近変更されたファイル
 log_info "Finding recently modified files"
@@ -73,8 +73,16 @@ else
         # timeout が無いと走査を途中で止められない。上限は場所の切れ目でしか効かない
         log_warn "[70_filesystem] 'timeout' is not available; the ${SCAN_BUDGET}s budget cannot interrupt a scan in progress"
     fi
+    # /usr/bin /usr/sbin は SUID が普通に置かれる場所（v0.3.2 までは fast の対象外だった）。
+    # 数千ファイル程度なので、巨大になり得る /usr/local /opt より先に見る。
+    # /bin /sbin は usrmerge 環境では /usr へのリンクなので、別物のときだけ見る。
+    scan_paths=(/tmp /var/tmp /dev/shm /etc /usr/bin /usr/sbin)
+    for p in /bin /sbin; do
+        [[ -L "$p" ]] || scan_paths+=("$p")
+    done
+    scan_paths+=(/usr/libexec /usr/local /opt)
     scan_start=${SECONDS}
-    for p in /tmp /var/tmp /dev/shm /etc /usr/local /opt; do
+    for p in "${scan_paths[@]}"; do
         [[ -e "$p" ]] || continue
         remaining=$(( SCAN_BUDGET - (SECONDS - scan_start) ))
         if [[ ${remaining} -le 0 ]]; then
@@ -127,13 +135,14 @@ log_info "Finding hidden files in sensitive directories"
 find /tmp /var/tmp /dev/shm "${LDIR_FIND_PRUNE[@]}" -name ".*" "${LDIR_FIND_LS[@]}" > "${FS_DIR}/hidden_files_sensitive.txt" 2>/dev/null || true
 
 # /dev/shm の内容（メモリベースのファイル、マルウェアが使用することがある）
-ls -laR /dev/shm > "${FS_DIR}/dev_shm_contents.txt" 2>&1 || true
+capture_partial "${FS_DIR}/dev_shm_contents.txt" ls -laR /dev/shm
 
 # システムバイナリのハッシュ（改竄検出用）
 log_info "Calculating hashes for system binaries"
 if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
     if command -v sha256sum &> /dev/null; then
-        find /bin /sbin /usr/bin /usr/sbin -type f -exec sha256sum {} \; > "${FS_DIR}/system_binaries_hashes.txt" 2>/dev/null || log_warn "Binary hash calculation incomplete"
+        # -exec ... + でまとめて渡す（1 ファイルごとに sha256sum を起動しない）
+        find /bin /sbin /usr/bin /usr/sbin -type f -exec sha256sum {} + > "${FS_DIR}/system_binaries_hashes.txt" 2>/dev/null || log_warn "Binary hash calculation incomplete"
     fi
 else
     echo "Skipped in fast mode (set LDIR_MODE=full to enable)" > "${FS_DIR}/system_binaries_hashes.txt"
@@ -141,7 +150,14 @@ fi
 
 # 削除されたが開かれたままのファイル（プロセスが削除されたファイルを使用）
 log_info "Finding deleted but open files"
-lsof +L1 > "${FS_DIR}/deleted_open_files.txt" 2>&1 || true
+# lsof +L1 は該当が無いと出力なしで 1 を返す
+if have_cmd lsof; then
+    capture_try "${FS_DIR}/deleted_open_files.txt" lsof +L1 \
+        || [[ -s "${FS_DIR}/deleted_open_files.txt" ]] \
+        || echo "lsof +L1: no deleted-but-open files (exit 1 with no output)" > "${FS_DIR}/deleted_open_files.txt"
+else
+    echo "lsof: command not available on this host" > "${FS_DIR}/deleted_open_files.txt"
+fi
 
 # パッケージマネージャでインストールされていないバイナリ
 # 1 ファイルごとに dpkg -S / rpm -qf を呼ぶと数千回の起動で分単位かかるため、

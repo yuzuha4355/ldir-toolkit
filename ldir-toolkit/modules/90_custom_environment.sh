@@ -68,6 +68,7 @@ case "${INIT_SYSTEM:-unknown}" in
 esac
 
 # 2. パッケージマネージャー情報
+# パッケージ管理のログ（dpkg.log, dnf.log 等）は 60_logs が期間と容量の上限付きで取る
 ensure_dir "${MOD_DIR}/packages"
 
 case "${PKG_MANAGER:-unknown}" in
@@ -75,36 +76,28 @@ case "${PKG_MANAGER:-unknown}" in
         log_info "[${MODULE_NAME}] Collecting APT package information..."
         save_command_output "dpkg -l" "${MOD_DIR}/packages/dpkg_list.txt"
         save_command_output "apt list --installed" "${MOD_DIR}/packages/apt_installed.txt"
-        safe_copy "/var/log/dpkg.log" "${MOD_DIR}/packages/dpkg.log"
-        safe_copy "/var/log/apt/history.log" "${MOD_DIR}/packages/apt_history.log"
         ;;
     dnf|yum)
         log_info "[${MODULE_NAME}] Collecting YUM/DNF package information..."
         save_command_output "${PKG_MANAGER} list installed" "${MOD_DIR}/packages/installed_packages.txt"
         save_command_output "${PKG_MANAGER} history" "${MOD_DIR}/packages/package_history.txt"
-        safe_copy "/var/log/dnf.log" "${MOD_DIR}/packages/dnf.log"
-        safe_copy "/var/log/yum.log" "${MOD_DIR}/packages/yum.log"
         ;;
     pacman)
         log_info "[${MODULE_NAME}] Collecting Pacman package information..."
         save_command_output "pacman -Q" "${MOD_DIR}/packages/pacman_installed.txt"
-        safe_copy "/var/log/pacman.log" "${MOD_DIR}/packages/pacman.log"
         ;;
     zypper)
         log_info "[${MODULE_NAME}] Collecting Zypper package information..."
         save_command_output "zypper packages --installed-only" "${MOD_DIR}/packages/zypper_installed.txt"
-        safe_copy "/var/log/zypp/history" "${MOD_DIR}/packages/zypper_history.txt"
         ;;
     apk)
         log_info "[${MODULE_NAME}] Collecting APK package information..."
         save_command_output "apk info -v" "${MOD_DIR}/packages/apk_installed.txt"
-        safe_copy "/var/log/apk.log" "${MOD_DIR}/packages/apk.log"
         ;;
     emerge)
         log_info "[${MODULE_NAME}] Collecting Portage package information..."
         save_command_output "qlist -I" "${MOD_DIR}/packages/portage_installed.txt" || \
         save_command_output "emerge --list-sets" "${MOD_DIR}/packages/portage_sets.txt"
-        safe_copy "/var/log/emerge.log" "${MOD_DIR}/packages/emerge.log"
         ;;
     *)
         log_warn "[${MODULE_NAME}] Unknown package manager: ${PKG_MANAGER:-unknown}"
@@ -211,15 +204,14 @@ done
 # Cookie 等も入る（LDIR_ENABLE_WEB=0 の意図と矛盾する）。
 # - fast: 一覧だけ記録
 # - full: 丸ごと回収
-for user_home in /root /home/*; do
-    if [[ -d "$user_home/.config" ]]; then
-        username="$(basename "$user_home")"
+while IFS=$'\t' read -r username user_home _; do
+    if [[ -n "$user_home" && -d "$user_home/.config" ]]; then
         find "$user_home/.config" -maxdepth 3 "${LDIR_FIND_LS[@]}" > "${MOD_DIR}/custom_configs/user_config_${username}_listing.txt" 2>/dev/null || true
         if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
             safe_copy "$user_home/.config" "${MOD_DIR}/custom_configs/user_config_${username}"
         fi
     fi
-done
+done < <(ldir_user_homes)
 
 # 9. ディストリビューション固有ファイル
 ensure_dir "${MOD_DIR}/distro_specific"

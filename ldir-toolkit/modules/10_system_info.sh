@@ -35,10 +35,10 @@ capture "${SYS_DIR}/kernel_version.txt" cat /proc/version
 capture "${SYS_DIR}/kernel_cmdline.txt" cat /proc/cmdline
 
 # ハードウェア情報
-lscpu > "${SYS_DIR}/cpu_info.txt" 2>&1 || true
+capture "${SYS_DIR}/cpu_info.txt" lscpu
 capture "${SYS_DIR}/memory_info.txt" free -h
 capture "${SYS_DIR}/disk_usage.txt" df -h
-lsblk > "${SYS_DIR}/block_devices.txt" 2>&1 || true
+capture "${SYS_DIR}/block_devices.txt" lsblk
 
 # ネットワークインターフェース
 capture_try "${SYS_DIR}/ip_addresses.txt" ip addr show || capture "${SYS_DIR}/ip_addresses.txt" ifconfig

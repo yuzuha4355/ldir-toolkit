@@ -1,6 +1,6 @@
 # LDIR-Toolkit 収集手順書
 
-対象バージョン: 0.3.2
+対象バージョン: 0.4.0
 
 インシデント対応の初動で、対象ホストから収集を行い、収集物を引き渡すまでの手順です。
 ツールの仕様は [SPECIFICATION.md](SPECIFICATION.md) を参照してください。
@@ -19,7 +19,7 @@
 
 ## 1. 着手前の判断
 
-収集を始める前に、次の 3 点を決めます。
+収集を始める前に、次の 4 点を決めます。
 
 ### 1.1 ホストを止めるか、動かしたまま収集するか
 
@@ -43,6 +43,19 @@
 - **まず fast**。短時間で終わり、容量も小さい
 - full は、fast の結果を見て必要と判断してから。ブラウザデータや `~/.config` 全体など、個人情報を多く含む
 
+### 1.4 ログをどこまで遡るか
+
+ログ（journal、認証ログ、syslog、auditd、Web サーバー等）は、既定で**直近 30 日**、ログの種類ごとに **100 MB** まで取ります。
+
+| 状況 | 指定 |
+|---|---|
+| 侵入の時期が分からない、30 日より前の可能性がある | `--log-days 90`（`30` `60` `90` から選ぶ） |
+| Web サーバー等のログが大きく、上限で切れることが分かっている | `--log-max-mb 500`、上限なしは `--log-max-mb 0`（容量と時間に注意） |
+
+- 期間は**ファイルの更新日時**で判定します。ローテーション済み（`.1`、`.2.gz`）も期間内なら取ります。圧縮されたものは展開せずにコピーします
+- 上限に達した場合は、新しいファイルから取り、残りは取りません。取らなかったファイルは WARN と `logs/log_inventory.tsv` に残ります
+- full モードは、指定しなければ期間・容量とも無制限です
+
 ## 2. 準備
 
 ### 2.1 ツールの入手と検証
@@ -50,11 +63,11 @@
 調査用の端末で行います。
 
 ```bash
-sha256sum -c ldir-toolkit-v0.3.2.tar.gz.sha256
+sha256sum -c ldir-toolkit-v0.4.0.tar.gz.sha256
 ```
 
 ```bash
-tar -xzf ldir-toolkit-v0.3.2.tar.gz
+tar -xzf ldir-toolkit-v0.4.0.tar.gz
 ```
 
 リポジトリから配布物を作る場合:
@@ -92,13 +105,13 @@ sudo mount /dev/sdX1 /mnt/ldir
 **転送する場合**
 
 ```bash
-scp ldir-toolkit-v0.3.2.tar.gz <ユーザー>@<対象ホスト>:/tmp/
+scp ldir-toolkit-v0.4.0.tar.gz <ユーザー>@<対象ホスト>:/tmp/
 ```
 
 対象ホスト上で展開します。
 
 ```bash
-cd /tmp && tar -xzf ldir-toolkit-v0.3.2.tar.gz
+cd /tmp && tar -xzf ldir-toolkit-v0.4.0.tar.gz
 ```
 
 SSH でログインすること自体が、認証ログとログイン履歴に記録されます。ログイン時刻を控えておきます。
@@ -116,14 +129,15 @@ fast で数百 MB、full で数 GB を見込みます。
 ### 3.1 実行（fast・アーカイブ付き）
 
 ```bash
-cd /mnt/ldir/ldir-toolkit-v0.3.2
+cd /mnt/ldir/ldir-toolkit-v0.4.0
 ```
 
 ```bash
 sudo ./ldir-collect.sh --archive /mnt/ldir/evidence
 ```
 
-実行中は画面に進行が出ます。モジュールは、プロセス → ネットワーク → カーネル → コンテナ → 設定 → ログ → ファイルシステムの順に動きます。
+実行中は画面に進行が出ます。モジュールは、プロセス → ネットワーク → カーネル → コンテナ → 仮想化 → 設定 → ログ → ファイルシステムの順に動きます。
+開始時に `Logs: period last 30 days (...), size cap 100 MB per log group` と表示されます。期間と上限がこのとおりか確認します。
 
 ### 3.2 実行（full）
 
@@ -137,12 +151,15 @@ sudo ./ldir-collect.sh --mode full --archive /mnt/ldir/evidence
 
 | 状況 | 指定 |
 |---|---|
+| ログを 90 日分取りたい | `--log-days 90`（`30` `60` `90` のみ。それ以外はエラーで何も収集しない） |
+| ログの容量の上限を変えたい | `--log-max-mb 500`（ログの種類ごと）。上限なしは `--log-max-mb 0` |
+| full だがログは 60 日分でよい | `--mode full --log-days 60` |
 | fast のままブラウザデータも取りたい | `sudo LDIR_ENABLE_WEB=1 ./ldir-collect.sh ...` |
 | クラウドのインスタンスである | `sudo LDIR_ENABLE_CLOUD_METADATA=1 ./ldir-collect.sh ...` |
 | full だがメタデータ API には接続したくない | `sudo LDIR_ENABLE_CLOUD_METADATA=0 ./ldir-collect.sh --mode full ...` |
-| 環境変数の値を伏せずに残したい | `--no-redact` を付ける |
+| 環境変数や VM 定義の値を伏せずに残したい | `--no-redact` を付ける |
 
-`--no-redact` を使うと、収集物にトークンやパスワードが平文で入ります。使った場合は記録に残し、収集物の取り扱いを一段厳しくしてください。
+`--no-redact` を使うと、収集物にトークンやパスワード（VM のコンソールのパスワード、cloud-init の user-data を含む）が平文で入ります。使った場合は記録に残し、収集物の取り扱いを一段厳しくしてください。
 
 ### 3.4 実行中にしてはいけないこと
 
@@ -160,8 +177,8 @@ Output:             /mnt/ldir/evidence/web01_20261112_101500
 Hash list SHA256:   5a87a651...
 Archive:            /mnt/ldir/evidence/web01_20261112_101500.tar.gz
 Archive SHA256:     9c1f03be...
-Successful Modules: 12/12
-Failed Modules:     0/12
+Successful Modules: 13/13
+Failed Modules:     0/13
 ```
 
 **`Hash list SHA256` と `Archive SHA256` を記録に書き写します。** この 2 つが、収集物が後から変更されていないことの根拠になります。
@@ -187,6 +204,8 @@ cat /mnt/ldir/evidence/<ホスト名>_<日時>/metadata/manifest.txt
 見る点:
 
 - `✗` の付いたモジュールが無いか
+- `Log Days` `Log Size Cap` が意図どおりか
+- `Virtualization` の行（このホストが VM か）
 - `warn=` が 0 でないモジュール。内容は次で確認できます
 
 ```bash
@@ -204,6 +223,12 @@ WARN の読み方:
 | `Module lists in /proc/modules and /sys/module differ` | カーネルモジュールの一覧が食い違う | **優先して調査**。`kernel/modules_in_*.txt` を確認 |
 | `... search stopped at the 60s budget; lists are partial` | fast モードの権限検索が時間切れになった（`/opt` 等が大きい） | `filesystem/scan_incomplete.txt` で未走査の場所を確認。必要なら full で再収集 |
 | `LD_PRELOAD scan of /etc hit the 60s limit` | `/etc` の検索が時間切れになった | 結果は部分的。`kernel/ld.so.preload*` は別途確認済みなので、そちらを優先して見る |
+| `[web] log size cap of 100 MB reached: N older file(s) ... NOT collected` | そのログの種類が上限に達し、古いファイルを取っていない | `logs/log_inventory.tsv` の `over_cap` の行が取っていないファイル。必要なら `--log-max-mb` を上げて再収集するか、そのファイルを個別に持ち出す |
+| `journal export journal_period.txt reached the N-entry limit` | journal のテキスト出力が上限で切れた（新しい側を残している） | 期間全体はバイナリの `logs/journal/` にある（`journalctl --directory` で読む） |
+| `[35_virtualization] QEMU running outside libvirt and Proxmox` | 管理ツールの外で起動された VM が動いている | **優先して調査**。`virtualization/hypervisor_processes.tsv` のコマンドラインと起動ユーザーを確認 |
+| `libvirt socket exists ... but virsh did not answer` | libvirt のデーモンが応答しない | VM の一覧は取れていない。`/etc/libvirt` の定義は取れている |
+| `per-VM queries stopped at the 60s budget` | VM が多く、fast モードの時間の上限に達した | `virtualization/scan_incomplete.txt` に取れなかった VM。必要なら full で再収集 |
+| `docker inspect failed for N of M containers` | 一部のコンテナの詳細が取れなかった | `containers/docker/inspect/*.inspect_failed.txt` |
 | `Unknown init system` | init を判別できなかった | コンテナ内では通常 |
 
 ### 4.4 その場での検証
@@ -289,7 +314,7 @@ gpg --symmetric --cipher-algo AES256 <ホスト名>_<日時>.tar.gz
 対象ホストのディスクにツールや収集物を置いた場合は、持ち出しと検証が済んでから削除します。
 
 ```bash
-sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.2 /tmp/ldir-toolkit-v0.3.2.tar.gz
+sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.4.0 /tmp/ldir-toolkit-v0.4.0.tar.gz
 ```
 
 削除したパスと時刻を記録します。作業終了時刻を記録し、記録を締めます。
@@ -300,12 +325,14 @@ sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.2 /tmp/ldir-toolkit-v0.3.2.t
 
 | 見るもの | ファイル | 着眼点 |
 |---|---|---|
-| 所見の有無 | `metadata/modules/*.log` の WARN | `ld.so.preload`、モジュール一覧の食い違い |
+| 所見の有無 | `metadata/modules/*.log` の WARN | `ld.so.preload`、モジュール一覧の食い違い、管理外の QEMU |
+| ログの取れ具合 | `logs/log_summary.txt` | `capped`（一部を取っていない）、`none_in_period`（ログはあるが期間内の更新が無い。ログが止められていないか） |
 | 実行ファイルが消されたプロセス | `execution/proc_details/*/exe.txt` | 末尾が `(deleted)` |
 | 一時領域から動くプロセス | `execution/proc_details/*/exe.txt` `cwd.txt` | `/tmp` `/dev/shm` `/var/tmp` |
 | 待ち受けと外向き接続 | `network/ss_listening.txt` `ss_established.txt` | 見覚えのないポート、宛先 |
-| ログイン | `logs/last_logins.txt` `failed_logins.txt` `auth.log` | 時間帯、接続元、失敗の連続 |
-| 鍵の追加 | `config/user_ssh/*/authorized_keys` | 覚えのない公開鍵 |
+| ログイン | `logs/last_logins.txt` `failed_logins.txt` `auth.log*` `secure*` `journal_auth.txt` | 時間帯、接続元、失敗の連続 |
+| 鍵の追加 | `config/user_ssh/*/authorized_keys*` `config/sshd_effective_config.txt` | 覚えのない公開鍵、`AuthorizedKeysFile` の変更、`~/.ssh/rc` |
+| ユーザー | `config/user_homes.tsv` | `orphan`（passwd に無いホーム）、`/var/lib` 等に置かれたサービスアカウントのホーム |
 | 権限 | `config/sudoers` `sudoers.d/` `passwd` | UID 0 の追加、`NOPASSWD` |
 | 永続化 | `persistence/` | 最近作られたユニット、cron、シェル初期化ファイルの追記 |
 | 最近の変更 | `filesystem/modified_last_7days.txt` | 侵害が疑われる時刻の前後 |
@@ -313,7 +340,8 @@ sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.2 /tmp/ldir-toolkit-v0.3.2.t
 | 由来不明のバイナリ | `filesystem/unpackaged_binaries_*.txt` | 候補の一覧。1 件ずつ由来を確認 |
 | カーネル | `kernel/sys_module_details.tsv` `bpf_progs.txt` | taint 付きモジュール、由来不明の eBPF |
 | コンテナ | `containers/*/risk_summary.tsv` | `privileged=true`、`pid=host`、ホストの `/` や docker.sock のマウント |
-| 操作の痕跡 | `execution/bash_history_*` | ダウンロード、権限変更、ログ削除 |
+| 仮想化 | `virtualization/guest/guest_agents.tsv` `virtualization/host/` | 外からコマンドを実行できるエージェント、見覚えのない VM、LXD / Incus の信頼済み証明書、Proxmox のタスクログ |
+| 操作の痕跡 | `execution/bash_history_*` `execution/user_history/` | ダウンロード、権限変更、ログ削除。`.wget-hsts`（接続先）、`.viminfo`（編集したファイル） |
 
 rootkit が疑われる場合、このツールの出力は対象ホストのコマンドに依存しているため、改ざんされている可能性があります。メモリとディスクの取得を検討してください。
 
@@ -341,6 +369,7 @@ IP アドレス     :
 
 実行コマンド    :
 モード          : fast / full
+ログの期間・上限: 30 / 60 / 90 日、　MB（--log-max-mb）
 マスク          : 有 / 無（--no-redact）
 出力先          :
 出力媒体の識別  :
@@ -369,6 +398,9 @@ sudo ./ldir-collect.sh --archive /mnt/ldir/evidence
 
 # 収集（full）
 sudo ./ldir-collect.sh --mode full --archive /mnt/ldir/evidence
+
+# ログを 90 日分（30 / 60 / 90 のみ）
+sudo ./ldir-collect.sh --log-days 90 --archive /mnt/ldir/evidence
 
 # WARN の確認
 grep -h '^\[WARN\]' <収集ディレクトリ>/metadata/modules/*.log

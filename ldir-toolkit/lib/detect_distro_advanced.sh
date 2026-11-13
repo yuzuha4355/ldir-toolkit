@@ -138,6 +138,79 @@ detect_container_environment() {
     export CONTAINER_TYPE
 }
 
+# 仮想化の判定（このホスト自身が VM か）
+# 使えるものを順に試す。どれも無い環境でも止まらない。
+#   1. systemd-detect-virt --vm（あれば最も確か）
+#   2. DMI（/sys/class/dmi/id の製品名・ベンダー）
+#   3. /sys/hypervisor/type（Xen）
+#   4. /proc/cpuinfo の hypervisor フラグ（x86 の VM。種別までは分からない）
+# 結果: VIRT_TYPE（kvm, vmware, none, unknown 等）と VIRT_SOURCE（判定に使ったもの）
+# LDIR_VIRT_ROOT を付けると /sys や /proc をその下から読む（テスト用）。このとき
+# 実ホストを調べる systemd-detect-virt は使わない。
+_ldir_virt_from_dmi() {
+    local vendor="$1" product="$2"
+    case "${vendor}|${product}" in
+        *"Amazon EC2"*|*"|"*".metal")
+            case "${product}" in *.metal) echo "none" ;; *) echo "amazon" ;; esac ;;
+        *QEMU*)                          echo "qemu" ;;
+        *KVM*)                           echo "kvm" ;;
+        *VMware*)                        echo "vmware" ;;
+        *VirtualBox*|*innotek*)          echo "oracle" ;;
+        *Microsoft*"Virtual Machine"*)   echo "microsoft" ;;
+        *Xen*|*"HVM domU"*)              echo "xen" ;;
+        *Google*)                        echo "google" ;;
+        *Parallels*)                     echo "parallels" ;;
+        *Bochs*)                         echo "bochs" ;;
+        *OpenStack*)                     echo "kvm" ;;
+        *"Apple Virtualization"*)        echo "apple" ;;
+        *) echo "" ;;
+    esac
+}
+
+detect_virtualization() {
+    local root="${LDIR_VIRT_ROOT:-}" out vendor product t
+    VIRT_TYPE=""
+    VIRT_SOURCE=""
+    if [ -z "$root" ] && command -v systemd-detect-virt >/dev/null 2>&1; then
+        out="$(systemd-detect-virt --vm 2>/dev/null)" || true
+        if [ -n "$out" ]; then
+            VIRT_TYPE="$out"
+            VIRT_SOURCE="systemd-detect-virt"
+        fi
+    fi
+    if [ -z "$VIRT_TYPE" ] && [ -r "${root}/sys/class/dmi/id/sys_vendor" ]; then
+        vendor="$(cat "${root}/sys/class/dmi/id/sys_vendor" 2>/dev/null)"
+        product="$(cat "${root}/sys/class/dmi/id/product_name" 2>/dev/null)"
+        t="$(_ldir_virt_from_dmi "$vendor" "$product")"
+        if [ -n "$t" ]; then
+            VIRT_TYPE="$t"
+            VIRT_SOURCE="dmi: ${vendor} / ${product}"
+        fi
+    fi
+    if [ -z "$VIRT_TYPE" ] && [ -r "${root}/sys/hypervisor/type" ]; then
+        t="$(cat "${root}/sys/hypervisor/type" 2>/dev/null)"
+        if [ -n "$t" ]; then
+            VIRT_TYPE="$t"
+            VIRT_SOURCE="/sys/hypervisor/type"
+        fi
+    fi
+    if [ -z "$VIRT_TYPE" ] && [ -r "${root}/proc/cpuinfo" ]; then
+        if grep -qE '^flags[[:space:]]*:.*[[:space:]]hypervisor([[:space:]]|$)' "${root}/proc/cpuinfo" 2>/dev/null; then
+            VIRT_TYPE="vm-unknown-hypervisor"
+            VIRT_SOURCE="cpuinfo hypervisor flag"
+        elif grep -qE '^flags[[:space:]]*:' "${root}/proc/cpuinfo" 2>/dev/null && [ -r "${root}/sys/class/dmi/id/sys_vendor" ]; then
+            # x86 で hypervisor フラグが無く、DMI も既知の VM ではない
+            VIRT_TYPE="none"
+            VIRT_SOURCE="cpuinfo and dmi"
+        fi
+    fi
+    if [ -z "$VIRT_TYPE" ]; then
+        VIRT_TYPE="unknown"
+        VIRT_SOURCE="no usable detection source"
+    fi
+    export VIRT_TYPE VIRT_SOURCE
+}
+
 # SELinux/AppArmor検出
 detect_security_modules() {
     # SELinux
