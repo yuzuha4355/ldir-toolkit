@@ -62,11 +62,11 @@ safe_copy "/var/log/btmp" "${LOG_DIR}/"
 safe_copy "/var/log/lastlog" "${LOG_DIR}/"
 
 # テキスト形式でもエクスポート
-last -F > "${LOG_DIR}/last_logins.txt" 2>&1 || last > "${LOG_DIR}/last_logins.txt" 2>&1
+capture_try "${LOG_DIR}/last_logins.txt" last -F || capture "${LOG_DIR}/last_logins.txt" last
 lastb > "${LOG_DIR}/failed_logins.txt" 2>&1 || true
 lastlog > "${LOG_DIR}/lastlog.txt" 2>&1 || true
-who > "${LOG_DIR}/current_users.txt" 2>&1
-w > "${LOG_DIR}/current_users_detailed.txt" 2>&1
+capture "${LOG_DIR}/current_users.txt" who
+capture "${LOG_DIR}/current_users_detailed.txt" w
 
 # パッケージマネージャのログ
 log_info "Collecting package manager logs"

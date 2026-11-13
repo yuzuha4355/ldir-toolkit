@@ -22,12 +22,18 @@ log_info "[50_persistence] Starting persistence mechanism collection"
 # systemd units（systemdが存在する場合）
 if command -v systemctl &> /dev/null; then
     log_info "Collecting systemd configuration"
-    
-    systemctl list-unit-files > "${PERSIST_DIR}/systemd_unit_files.txt" 2>&1
-    systemctl list-units --all > "${PERSIST_DIR}/systemd_units_all.txt" 2>&1
-    systemctl list-timers --all > "${PERSIST_DIR}/systemd_timers.txt" 2>&1
-    systemctl status > "${PERSIST_DIR}/systemd_status.txt" 2>&1
-    
+
+    # 稼働中の systemd への問い合わせ。コンテナ等で systemd が PID 1 でない場合は
+    # 必ず失敗するので行わない（ユニットファイルのコピーは下で常に行う）。
+    if [[ -d /run/systemd/system ]]; then
+        capture "${PERSIST_DIR}/systemd_unit_files.txt" systemctl list-unit-files
+        capture "${PERSIST_DIR}/systemd_units_all.txt" systemctl list-units --all
+        capture "${PERSIST_DIR}/systemd_timers.txt" systemctl list-timers --all
+        capture "${PERSIST_DIR}/systemd_status.txt" systemctl status
+    else
+        echo "systemd is installed but not running as PID 1; runtime queries skipped" > "${PERSIST_DIR}/systemd_not_running.txt"
+    fi
+
     # カスタムユニットファイルのコピー
     safe_copy "/etc/systemd/system/" "${PERSIST_DIR}/systemd_system/"
     safe_copy "/usr/lib/systemd/system/" "${PERSIST_DIR}/systemd_usr_lib/"

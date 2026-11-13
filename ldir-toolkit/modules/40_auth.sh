@@ -61,11 +61,11 @@ done
 
 # 現在ログイン中のユーザ
 log_info "Collecting current login sessions"
-who -a > "${AUTH_DIR}/who_all.txt" 2>&1
-w -h > "${AUTH_DIR}/w_output.txt" 2>&1
+capture "${AUTH_DIR}/who_all.txt" who -a
+capture "${AUTH_DIR}/w_output.txt" w -h
 
 # ログイン履歴分析
-last -Faixw > "${AUTH_DIR}/last_full.txt" 2>&1 || last -a > "${AUTH_DIR}/last_full.txt" 2>&1
+capture_try "${AUTH_DIR}/last_full.txt" last -Faixw || capture "${AUTH_DIR}/last_full.txt" last -a
 
 log_success "[40_auth] Authentication information collection completed"
 exit 0

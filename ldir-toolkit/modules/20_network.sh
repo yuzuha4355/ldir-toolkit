@@ -22,17 +22,17 @@ log_info "[20_network] Starting network information collection"
 # ネットワーク接続状態
 log_info "Collecting network connection states"
 if command -v ss &> /dev/null; then
-    ss -tupln > "${NET_DIR}/ss_listening.txt" 2>&1
-    ss -tup > "${NET_DIR}/ss_established.txt" 2>&1
-    ss -s > "${NET_DIR}/ss_summary.txt" 2>&1
-    ss -anp > "${NET_DIR}/ss_all.txt" 2>&1
+    capture "${NET_DIR}/ss_listening.txt" ss -tupln
+    capture "${NET_DIR}/ss_established.txt" ss -tup
+    capture "${NET_DIR}/ss_summary.txt" ss -s
+    capture "${NET_DIR}/ss_all.txt" ss -anp
 fi
 
 if command -v netstat &> /dev/null; then
-    netstat -tulpn > "${NET_DIR}/netstat_listening.txt" 2>&1
-    netstat -anp > "${NET_DIR}/netstat_all.txt" 2>&1
-    netstat -rn > "${NET_DIR}/netstat_routing.txt" 2>&1
-    netstat -s > "${NET_DIR}/netstat_statistics.txt" 2>&1
+    capture "${NET_DIR}/netstat_listening.txt" netstat -tulpn
+    capture "${NET_DIR}/netstat_all.txt" netstat -anp
+    capture "${NET_DIR}/netstat_routing.txt" netstat -rn
+    capture "${NET_DIR}/netstat_statistics.txt" netstat -s
 fi
 
 # /proc からのネットワーク情報
@@ -46,18 +46,18 @@ safe_copy "/proc/net/route" "${NET_DIR}/"
 safe_copy "/proc/net/arp" "${NET_DIR}/"
 
 # ARPキャッシュ
-arp -a > "${NET_DIR}/arp_cache.txt" 2>&1 || ip neigh show > "${NET_DIR}/arp_cache.txt" 2>&1
+capture_try "${NET_DIR}/arp_cache.txt" arp -a || capture "${NET_DIR}/arp_cache.txt" ip neigh show
 
 # ルーティングテーブル
-ip route show > "${NET_DIR}/ip_routes.txt" 2>&1 || route -n > "${NET_DIR}/routes.txt" 2>&1
+capture_try "${NET_DIR}/ip_routes.txt" ip route show || capture "${NET_DIR}/routes.txt" route -n
 ip route show table all > "${NET_DIR}/ip_routes_all_tables.txt" 2>&1 || true
 
 # ネットワークインターフェース詳細
-ip addr show > "${NET_DIR}/ip_addresses.txt" 2>&1 || ifconfig -a > "${NET_DIR}/ip_addresses.txt" 2>&1
-ip link show > "${NET_DIR}/ip_links.txt" 2>&1
+capture_try "${NET_DIR}/ip_addresses.txt" ip addr show || capture "${NET_DIR}/ip_addresses.txt" ifconfig -a
+capture "${NET_DIR}/ip_links.txt" ip link show
 
 # インターフェース統計
-ip -s link > "${NET_DIR}/interface_statistics.txt" 2>&1
+capture "${NET_DIR}/interface_statistics.txt" ip -s link
 
 # DNS設定
 safe_copy "/etc/resolv.conf" "${NET_DIR}/"

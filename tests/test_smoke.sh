@@ -82,6 +82,17 @@ check "variable name is still recorded" grep -q '^SMOKE_TEST_API_TOKEN=<redacted
 check_not "secret value appears nowhere in the collection" grep -rqF "${CANARY}" "${D}"
 check "manifest records that redaction was on" grep -qx "Secret Redaction: 1" "${M}"
 
+echo "== fast-mode scan budget =="
+rc=0
+LDIR_FAST_SCAN_BUDGET=0 bash "${TOOLKIT}/ldir-collect.sh" "${WORK}/budget" > /dev/null 2>&1 || rc=$?
+B="$(find "${WORK}/budget" -mindepth 1 -maxdepth 1 -type d | head -1)"
+check "exhausted budget still exits 0" test "${rc}" -eq 0
+check "scan_incomplete.txt lists what was skipped" test -s "${B}/filesystem/scan_incomplete.txt"
+check "SUID list says it is partial instead of being empty" grep -q '^# PARTIAL RESULT' "${B}/filesystem/suid_sgid_files.txt"
+check "world-writable list says it is partial" grep -q '^# PARTIAL RESULT' "${B}/filesystem/world_writable_files.txt"
+check "manifest counts the cut-off as a warning" grep -Eq '70_filesystem.sh \(warn=[1-9]' "${B}/metadata/manifest.txt"
+check_not "a complete scan carries no partial marker" grep -q '^# PARTIAL RESULT' "${D}/filesystem/suid_sgid_files.txt"
+
 echo "== hygiene =="
 check_not "collection does not list itself" grep -rqF "${D}" "${D}/filesystem"
 nested="$(find "${D}" -type d | awk -F/ 'NF>1 && $NF==$(NF-1)' | head -5)"

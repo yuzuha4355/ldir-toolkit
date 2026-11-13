@@ -1,6 +1,6 @@
 # LDIR-Toolkit 収集手順書
 
-対象バージョン: 0.3.1
+対象バージョン: 0.3.2
 
 インシデント対応の初動で、対象ホストから収集を行い、収集物を引き渡すまでの手順です。
 ツールの仕様は [SPECIFICATION.md](SPECIFICATION.md) を参照してください。
@@ -50,11 +50,11 @@
 調査用の端末で行います。
 
 ```bash
-sha256sum -c ldir-toolkit-v0.3.1.tar.gz.sha256
+sha256sum -c ldir-toolkit-v0.3.2.tar.gz.sha256
 ```
 
 ```bash
-tar -xzf ldir-toolkit-v0.3.1.tar.gz
+tar -xzf ldir-toolkit-v0.3.2.tar.gz
 ```
 
 リポジトリから配布物を作る場合:
@@ -92,13 +92,13 @@ sudo mount /dev/sdX1 /mnt/ldir
 **転送する場合**
 
 ```bash
-scp ldir-toolkit-v0.3.1.tar.gz <ユーザー>@<対象ホスト>:/tmp/
+scp ldir-toolkit-v0.3.2.tar.gz <ユーザー>@<対象ホスト>:/tmp/
 ```
 
 対象ホスト上で展開します。
 
 ```bash
-cd /tmp && tar -xzf ldir-toolkit-v0.3.1.tar.gz
+cd /tmp && tar -xzf ldir-toolkit-v0.3.2.tar.gz
 ```
 
 SSH でログインすること自体が、認証ログとログイン履歴に記録されます。ログイン時刻を控えておきます。
@@ -116,7 +116,7 @@ fast で数百 MB、full で数 GB を見込みます。
 ### 3.1 実行（fast・アーカイブ付き）
 
 ```bash
-cd /mnt/ldir/ldir-toolkit-v0.3.1
+cd /mnt/ldir/ldir-toolkit-v0.3.2
 ```
 
 ```bash
@@ -197,7 +197,8 @@ WARN の読み方:
 
 | メッセージ | 意味 | 対応 |
 |---|---|---|
-| `Command failed: ...` | コマンドがそのホストで失敗した | 多くは権限やコンテナ環境の制約。該当項目が欠けていることを記録 |
+| `Command failed (exit N): <コマンド> -> <ファイル>` | コマンドがそのホストで失敗した。出力ファイルにはエラー文が入っている | 多くは権限やコンテナ環境の制約。**その項目は取れていない**ものとして記録する |
+| `ps is not procps (BusyBox?)` | `ps` が簡易版で、開始時刻・CPU 使用率・ツリー表示が取れない | `execution/ps_limited.txt` の読み替え方に従う。親子関係は `ppid` 列と `proc_details/` で追う |
 | `Command failed or timed out: docker info` | Docker は入っているがデーモンが応答しない | 停止中なら正常。想定外なら調査対象 |
 | `/etc/ld.so.preload exists` | 全プロセスにライブラリが注入される設定がある | **優先して調査**。`kernel/ld.so.preload` の内容を確認 |
 | `Module lists in /proc/modules and /sys/module differ` | カーネルモジュールの一覧が食い違う | **優先して調査**。`kernel/modules_in_*.txt` を確認 |
@@ -288,7 +289,7 @@ gpg --symmetric --cipher-algo AES256 <ホスト名>_<日時>.tar.gz
 対象ホストのディスクにツールや収集物を置いた場合は、持ち出しと検証が済んでから削除します。
 
 ```bash
-sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.1 /tmp/ldir-toolkit-v0.3.1.tar.gz
+sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.2 /tmp/ldir-toolkit-v0.3.2.tar.gz
 ```
 
 削除したパスと時刻を記録します。作業終了時刻を記録し、記録を締めます。

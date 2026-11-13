@@ -20,10 +20,10 @@ ensure_dir "${SYS_DIR}" || { log_error "[10_system_info] Failed to create ${SYS_
 log_info "[10_system_info] Starting system information collection"
 
 # システム基本情報
-uname -a > "${SYS_DIR}/uname.txt" 2>&1
-hostname > "${SYS_DIR}/hostname.txt" 2>&1
-date > "${SYS_DIR}/collection_time.txt" 2>&1
-uptime > "${SYS_DIR}/uptime.txt" 2>&1
+capture "${SYS_DIR}/uname.txt" uname -a
+capture "${SYS_DIR}/hostname.txt" hostname
+capture "${SYS_DIR}/collection_time.txt" date
+capture "${SYS_DIR}/uptime.txt" uptime
 
 # OS情報
 safe_copy "/etc/os-release" "${SYS_DIR}/"
@@ -31,21 +31,21 @@ safe_copy "/etc/lsb-release" "${SYS_DIR}/"
 safe_copy "/etc/issue" "${SYS_DIR}/"
 
 # カーネル情報
-cat /proc/version > "${SYS_DIR}/kernel_version.txt" 2>&1
-cat /proc/cmdline > "${SYS_DIR}/kernel_cmdline.txt" 2>&1
+capture "${SYS_DIR}/kernel_version.txt" cat /proc/version
+capture "${SYS_DIR}/kernel_cmdline.txt" cat /proc/cmdline
 
 # ハードウェア情報
 lscpu > "${SYS_DIR}/cpu_info.txt" 2>&1 || true
-free -h > "${SYS_DIR}/memory_info.txt" 2>&1
-df -h > "${SYS_DIR}/disk_usage.txt" 2>&1
+capture "${SYS_DIR}/memory_info.txt" free -h
+capture "${SYS_DIR}/disk_usage.txt" df -h
 lsblk > "${SYS_DIR}/block_devices.txt" 2>&1 || true
 
 # ネットワークインターフェース
-ip addr show > "${SYS_DIR}/ip_addresses.txt" 2>&1 || ifconfig > "${SYS_DIR}/ip_addresses.txt" 2>&1
-ip route show > "${SYS_DIR}/routing_table.txt" 2>&1 || route -n > "${SYS_DIR}/routing_table.txt" 2>&1
+capture_try "${SYS_DIR}/ip_addresses.txt" ip addr show || capture "${SYS_DIR}/ip_addresses.txt" ifconfig
+capture_try "${SYS_DIR}/routing_table.txt" ip route show || capture "${SYS_DIR}/routing_table.txt" route -n
 
 # タイムゾーン
-timedatectl > "${SYS_DIR}/timezone.txt" 2>&1 || date > "${SYS_DIR}/timezone.txt" 2>&1
+capture_try "${SYS_DIR}/timezone.txt" timedatectl || capture "${SYS_DIR}/timezone.txt" date
 
 # 環境変数（収集プロセス自身のもの。sudo 元のシェルのトークン類が入り得るため値を伏せる）
 env 2>&1 | redact_env > "${SYS_DIR}/environment_variables.txt"

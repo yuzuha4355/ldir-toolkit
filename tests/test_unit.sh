@@ -61,7 +61,8 @@ check "masks *_TOKEN values" test "$(red 'GH_TOKEN=abc123')" = 'GH_TOKEN=<redact
 check "masks *_SECRET_ACCESS_KEY values" test "$(red 'AWS_SECRET_ACCESS_KEY=x y')" = 'AWS_SECRET_ACCESS_KEY=<redacted:3 chars>'
 check "masks lower-case names" test "$(red 'db_password=hunter2')" = 'db_password=<redacted:7 chars>'
 check "keeps ordinary variables" test "$(red 'LANG=C.UTF-8')" = 'LANG=C.UTF-8'
-check "keeps MAX_TOKENS (a count, not a token)" test "$(red 'MAX_TOKENS=4096')" = 'MAX_TOKENS=4096'
+check "masks plural *_TOKENS" test "$(red 'GITHUB_TOKENS=abc')" = 'GITHUB_TOKENS=<redacted:3 chars>'
+check "masks TOKENS in the middle of a name" test "$(red 'API_TOKENS_FILE=abc')" = 'API_TOKENS_FILE=<redacted:3 chars>'
 check "keeps LDIR_REDACT_SECRETS" test "$(red 'LDIR_REDACT_SECRETS=1')" = 'LDIR_REDACT_SECRETS=1'
 check "masks TOKEN in the middle of a name" test "$(red 'MY_TOKEN_VALUE=abc')" = 'MY_TOKEN_VALUE=<redacted:3 chars>'
 check "masks plural *_SECRETS" test "$(red 'CLIENT_SECRETS=x')" = 'CLIENT_SECRETS=<redacted:1 chars>'
@@ -76,6 +77,24 @@ check "masks docker-inspect style Env entries" test "$(red '    "DB_PASSWORD=s3c
 check "keeps non-secret Env entries" test "$(red '    "PATH=/bin"')" = '    "PATH=/bin"'
 check "passes through non-assignment lines" test "$(red 'just some text')" = 'just some text'
 check "LDIR_REDACT_SECRETS=0 disables masking" test "$(printf 'GH_TOKEN=abc\n' | LDIR_REDACT_SECRETS=0 redact_env)" = 'GH_TOKEN=abc'
+
+echo "== capture =="
+capture "${WORK}/cap/ok.txt" echo captured
+check "saves output and creates parent dir" grep -qx captured "${WORK}/cap/ok.txt"
+: > "${LDIR_MODULE_LOG}"
+capture "${WORK}/cap/fail.txt" sh -c 'echo oops >&2; exit 3'
+check "failing command is a WARN with its exit code" grep -q '^\[WARN\].*exit 3' "${LDIR_MODULE_LOG}"
+check "failing command's stderr is kept in the file" grep -qx oops "${WORK}/cap/fail.txt"
+: > "${LDIR_MODULE_LOG}"
+capture "${WORK}/cap/missing.txt" ldir-no-such-command-xyz
+check_not "missing command is not a WARN" grep -q '^\[WARN\]' "${LDIR_MODULE_LOG}"
+check "missing command is noted in the file" grep -q 'not available' "${WORK}/cap/missing.txt"
+: > "${LDIR_MODULE_LOG}"
+capture_try "${WORK}/cap/try.txt" false || capture "${WORK}/cap/try.txt" echo fallback
+check "capture_try failure is silent when a fallback follows" test ! -s "${LDIR_MODULE_LOG}"
+check "fallback output wins" grep -qx fallback "${WORK}/cap/try.txt"
+check_not "modules contain no unchecked '> file 2>&1' collection commands" \
+    grep -nE '^[[:space:]]*[a-z][^|>]* > "\$\{[A-Z_]+\}/[^"]+" 2>&1$' "${TOOLKIT}"/modules/*.sh
 
 echo "== run_limited =="
 check "runs a command" run_limited 5 true
