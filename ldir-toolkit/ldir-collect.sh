@@ -16,7 +16,7 @@ export PATH
 # NOTE: 変数名を VERSION にしないこと。/etc/os-release も VERSION を定義しており、
 #       source されると上書きされる（v0.2.1 でマニフェストに OS のバージョンが
 #       記録されていた原因）。
-LDIR_VERSION="0.3.0"
+LDIR_VERSION="0.3.1"
 export LDIR_VERSION
 
 # スクリプトディレクトリ取得（先に確定）
@@ -63,6 +63,8 @@ Environment:
   LDIR_ARCHIVE                 1/0  create tar.gz       (default: 0)
   LDIR_REDACT_SECRETS          1/0  mask token/password values in collected
                                     environment variables (default: 1)
+  LDIR_FAST_SCAN_BUDGET        seconds allowed for the permission search in
+                                    fast mode (default: 60)
   LDIR_VERBOSE                 1/0  also print "not present" notices
 
 Examples:

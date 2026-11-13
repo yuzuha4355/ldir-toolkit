@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-13
+
+Measured on a GitHub-hosted runner VM (systemd and Docker running, large `/opt` and `/usr/local`), where fast mode took 231 seconds.
+
+### Fixed
+- `25_kernel` took 155s in fast mode: `getcap -r` walked `/usr/lib`, `/opt`, `/home` and `/usr/local`, and the BPF fd scan started one `readlink` per open file descriptor. Fast mode now checks binary directories and temp areas only (full mode still scans `/`), and fds are listed with a single `ls`. Measured after the change: 2s
+- `70_filesystem` spent about 150s on the SUID/SGID and world-writable search. The time is proportional to the number of files under `/opt` and `/usr/local`. Two changes:
+  - both lists now come from one traversal (measured: 152s -> 131s; the second walk had been hitting a warm cache, so this alone helped little)
+  - in fast mode the search has a time budget (`LDIR_FAST_SCAN_BUDGET`, default 60s). Small, abuse-prone locations are scanned first. When the budget runs out the lists are marked partial with a WARN and `filesystem/scan_incomplete.txt`. Full mode is not limited
+- `50_persistence`: the `LD_PRELOAD` text search of `/etc` is limited to 60s; a cut-off is reported as a WARN
+
+### Added
+- CI runs the smoke test on the runner host as well as in containers, and prints per-module timings and the timestamped progress log
+
 ## [0.3.0] - 2026-11-12
 
 ### Changed

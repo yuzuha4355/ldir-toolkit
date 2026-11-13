@@ -1,6 +1,6 @@
 # LDIR-Toolkit 仕様書
 
-対象バージョン: 0.3.0
+対象バージョン: 0.3.1
 
 この文書は、収集ツール `ldir-collect.sh` が「何を・どの順で・どこへ」出力するかを定めます。
 実施の手順は [PROCEDURE.md](PROCEDURE.md) を参照してください。
@@ -63,6 +63,7 @@ ldir-collect.sh [options] [output_directory]
 | `LDIR_REDACT_SECRETS` | `1` | 環境変数の秘匿値マスク。`0` で無効 |
 | `LDIR_VERBOSE` | `0` | 「対象が存在しない」通知も画面に出す |
 | `LDIR_CLOUD_METADATA_TIMEOUT` | `2` | メタデータ API 1 回あたりの待ち時間（秒） |
+| `LDIR_FAST_SCAN_BUDGET` | `60` | fast モードで SUID/SGID・world-writable の検索に使える時間（秒）。超えた分は打ち切り、WARN を出す |
 | `LDIR_CONTAINER_TIMEOUT` | `20` | コンテナランタイムへの問い合わせ 1 回あたりの待ち時間（秒） |
 | `NO_COLOR` | 未設定 | 設定すると画面出力を着色しない |
 
@@ -179,6 +180,7 @@ ldir-collect.sh [options] [output_directory]
 `WARN` には「失敗」のほか「調査担当者に見てほしい所見」も含みます。現在の所見は次の 2 つです。
 
 - `/etc/ld.so.preload` が存在する
+- fast モードの権限検索や `/etc` の検索が時間の上限に達し、結果が部分的である
 - `/proc/modules` と `/sys/module` のモジュール一覧が食い違う
 
 ### 6.4 file_hashes.txt と検証
@@ -289,7 +291,8 @@ sha256sum -c metadata/file_hashes.txt | grep -v ': OK$'    # 不一致だけ表�
 | `mount_points.txt` `proc_mounts.txt` `fstab.txt` `disk_usage_human.txt` | マウントと容量 |
 | `modified_last_7days.txt` | 7 日以内に変更されたファイル |
 | `tmp_files.txt` `var_tmp_files.txt` `hidden_files_sensitive.txt` `dev_shm_contents.txt` | 一時領域の内容 |
-| `suid_sgid_files.txt` `world_writable_files.txt` | 権限の観点 |
+| `suid_sgid_files.txt` `world_writable_files.txt` | 権限の観点。fast では `/tmp` `/var/tmp` `/dev/shm` `/etc` `/usr/local` `/opt` の順に、合計 60 秒まで |
+| `scan_incomplete.txt` | 上の検索が時間の上限で打ち切られた場合のみ。見られなかった場所の一覧 |
 | `unpackaged_binaries_dpkg.txt` / `_rpm.txt` | パッケージに属さない `/usr/bin` `/usr/sbin` `/usr/local/bin` `/usr/local/sbin` のファイル |
 | `deleted_open_files.txt` | 削除済みだが開かれたままのファイル |
 | `system_binaries_hashes.txt` | full のみ |

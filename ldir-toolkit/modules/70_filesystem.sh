@@ -47,30 +47,63 @@ fi
 find /tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/tmp_files.txt" 2>/dev/null || true
 find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/var_tmp_files.txt" 2>/dev/null || true
 
-# SUID/SGID ファイル（権限昇格に悪用される可能性）
-log_info "Finding SUID/SGID files"
-if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || log_debug "find reported errors during SUID/SGID search"
+# SUID/SGID ファイル（権限昇格に悪用される可能性）と
+# ワールドライタブルファイル（脆弱性の可能性）
+#
+# 走査は 1 回にまとめる（別々に find を回すと同じツリーを 2 度歩く）。
+#
+# 所要時間は対象のファイル数に比例する。/opt や /usr/local に数百万ファイルある
+# 実機では、キャッシュが効いていない初回の走査だけで 2 分を超えた。
+# fast モードは初動用なので、この検索全体に時間の上限（既定 60 秒）を設ける。
+# 上限に達した場合は、そこまでの結果を残し、WARN と scan_incomplete.txt で明示する。
+# 1) どちらかの条件に当たるファイルの候補を 1 回の走査で集める
+# 2) 候補（少数）だけを条件ごとに振り分ける
+log_info "Finding SUID/SGID and world-writable files"
 
-    # ワールドライタブルファイル（脆弱性の可能性）
-    log_info "Finding world-writable files"
-    find / "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+PERM_CANDIDATES="${FS_DIR}/.perm_candidates.tmp"
+: > "${PERM_CANDIDATES}"
+if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+    find / "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
+        >> "${PERM_CANDIDATES}" 2>/dev/null || log_debug "find reported errors during permission search"
 else
     # fast mode: focus on common abuse paths
-    {
-        for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
-            [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 \) "${LDIR_FIND_LS[@]}" 2>/dev/null
-        done
-    } > "${FS_DIR}/suid_sgid_files.txt" 2>/dev/null || true
-
-    {
-        for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
-            [[ -e "$p" ]] || continue
-            find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f -perm -0002 "${LDIR_FIND_LS[@]}" 2>/dev/null
-        done
-    } > "${FS_DIR}/world_writable_files.txt" 2>/dev/null || true
+    # 小さく、悪用されやすい場所から先に見る（上限に達しても重要な場所は済んでいる）
+    SCAN_BUDGET="${LDIR_FAST_SCAN_BUDGET:-60}"
+    scan_start=${SECONDS}
+    for p in /tmp /var/tmp /dev/shm /etc /usr/local /opt; do
+        [[ -e "$p" ]] || continue
+        remaining=$(( SCAN_BUDGET - (SECONDS - scan_start) ))
+        if [[ ${remaining} -le 0 ]]; then
+            echo "$p: not scanned (time budget of ${SCAN_BUDGET}s used up)" >> "${FS_DIR}/scan_incomplete.txt"
+            continue
+        fi
+        run_limited "${remaining}" find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
+            >> "${PERM_CANDIDATES}" 2>/dev/null
+        if [[ $? -eq 124 ]]; then
+            echo "$p: partially scanned (time budget of ${SCAN_BUDGET}s used up)" >> "${FS_DIR}/scan_incomplete.txt"
+        fi
+    done
+    if [[ -s "${FS_DIR}/scan_incomplete.txt" ]]; then
+        log_warn "[70_filesystem] SUID/SGID and world-writable search stopped at the ${SCAN_BUDGET}s budget; lists are partial (see filesystem/scan_incomplete.txt, or use --mode full)"
+    fi
 fi
+
+# classify_candidates <出力ファイル> <find の条件（文字列）>
+# 候補を xargs でまとめて find に渡し、条件に合うものだけ詳細表示する。
+# （bash の read ループで 1 件ずつ読むと、候補が数万件ある実機で 20 秒以上かかった）
+LS_ACTION="${LDIR_FIND_LS[*]}"
+classify_candidates() {
+    local out="$1" cond="$2"
+    : > "$out"
+    [[ -s "${PERM_CANDIDATES}" ]] || return 0
+    # shellcheck disable=SC2016  # $@ は内側の sh で展開する
+    xargs -0 -r sh -c 'find "$@" -maxdepth 0 '"${cond} ${LS_ACTION}" _ \
+        < "${PERM_CANDIDATES}" >> "$out" 2>/dev/null || true
+}
+
+classify_candidates "${FS_DIR}/suid_sgid_files.txt" '\( -perm -4000 -o -perm -2000 \)'
+classify_candidates "${FS_DIR}/world_writable_files.txt" '-perm -0002'
+rm -f "${PERM_CANDIDATES}"
 
 # 隠しファイル（ドットファイル）
 log_info "Finding hidden files in sensitive directories"

@@ -1,6 +1,6 @@
 # LDIR-Toolkit 収集手順書
 
-対象バージョン: 0.3.0
+対象バージョン: 0.3.1
 
 インシデント対応の初動で、対象ホストから収集を行い、収集物を引き渡すまでの手順です。
 ツールの仕様は [SPECIFICATION.md](SPECIFICATION.md) を参照してください。
@@ -50,11 +50,11 @@
 調査用の端末で行います。
 
 ```bash
-sha256sum -c ldir-toolkit-v0.3.0.tar.gz.sha256
+sha256sum -c ldir-toolkit-v0.3.1.tar.gz.sha256
 ```
 
 ```bash
-tar -xzf ldir-toolkit-v0.3.0.tar.gz
+tar -xzf ldir-toolkit-v0.3.1.tar.gz
 ```
 
 リポジトリから配布物を作る場合:
@@ -92,13 +92,13 @@ sudo mount /dev/sdX1 /mnt/ldir
 **転送する場合**
 
 ```bash
-scp ldir-toolkit-v0.3.0.tar.gz <ユーザー>@<対象ホスト>:/tmp/
+scp ldir-toolkit-v0.3.1.tar.gz <ユーザー>@<対象ホスト>:/tmp/
 ```
 
 対象ホスト上で展開します。
 
 ```bash
-cd /tmp && tar -xzf ldir-toolkit-v0.3.0.tar.gz
+cd /tmp && tar -xzf ldir-toolkit-v0.3.1.tar.gz
 ```
 
 SSH でログインすること自体が、認証ログとログイン履歴に記録されます。ログイン時刻を控えておきます。
@@ -116,7 +116,7 @@ fast で数百 MB、full で数 GB を見込みます。
 ### 3.1 実行（fast・アーカイブ付き）
 
 ```bash
-cd /mnt/ldir/ldir-toolkit-v0.3.0
+cd /mnt/ldir/ldir-toolkit-v0.3.1
 ```
 
 ```bash
@@ -201,6 +201,8 @@ WARN の読み方:
 | `Command failed or timed out: docker info` | Docker は入っているがデーモンが応答しない | 停止中なら正常。想定外なら調査対象 |
 | `/etc/ld.so.preload exists` | 全プロセスにライブラリが注入される設定がある | **優先して調査**。`kernel/ld.so.preload` の内容を確認 |
 | `Module lists in /proc/modules and /sys/module differ` | カーネルモジュールの一覧が食い違う | **優先して調査**。`kernel/modules_in_*.txt` を確認 |
+| `... search stopped at the 60s budget; lists are partial` | fast モードの権限検索が時間切れになった（`/opt` 等が大きい） | `filesystem/scan_incomplete.txt` で未走査の場所を確認。必要なら full で再収集 |
+| `LD_PRELOAD scan of /etc hit the 60s limit` | `/etc` の検索が時間切れになった | 結果は部分的。`kernel/ld.so.preload*` は別途確認済みなので、そちらを優先して見る |
 | `Unknown init system` | init を判別できなかった | コンテナ内では通常 |
 
 ### 4.4 その場での検証
@@ -286,7 +288,7 @@ gpg --symmetric --cipher-algo AES256 <ホスト名>_<日時>.tar.gz
 対象ホストのディスクにツールや収集物を置いた場合は、持ち出しと検証が済んでから削除します。
 
 ```bash
-sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.0 /tmp/ldir-toolkit-v0.3.0.tar.gz
+sudo rm -rf /tmp/ldir_output /tmp/ldir-toolkit-v0.3.1 /tmp/ldir-toolkit-v0.3.1.tar.gz
 ```
 
 削除したパスと時刻を記録します。作業終了時刻を記録し、記録を締めます。
