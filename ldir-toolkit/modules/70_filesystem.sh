@@ -88,26 +88,21 @@ else
     fi
 fi
 
-# classify_candidates <出力ファイル> <find の条件...>
-# 候補を 200 件ずつ find に渡し、条件に合うものだけ詳細表示する
+# classify_candidates <出力ファイル> <find の条件（文字列）>
+# 候補を xargs でまとめて find に渡し、条件に合うものだけ詳細表示する。
+# （bash の read ループで 1 件ずつ読むと、候補が数万件ある実機で 20 秒以上かかった）
+LS_ACTION="${LDIR_FIND_LS[*]}"
 classify_candidates() {
-    local out="$1"; shift
-    local batch=() f
+    local out="$1" cond="$2"
     : > "$out"
-    while IFS= read -r -d '' f; do
-        batch+=("$f")
-        if [[ ${#batch[@]} -ge 200 ]]; then
-            find "${batch[@]}" -maxdepth 0 "$@" "${LDIR_FIND_LS[@]}" >> "$out" 2>/dev/null || true
-            batch=()
-        fi
-    done < "${PERM_CANDIDATES}"
-    if [[ ${#batch[@]} -gt 0 ]]; then
-        find "${batch[@]}" -maxdepth 0 "$@" "${LDIR_FIND_LS[@]}" >> "$out" 2>/dev/null || true
-    fi
+    [[ -s "${PERM_CANDIDATES}" ]] || return 0
+    # shellcheck disable=SC2016  # $@ は内側の sh で展開する
+    xargs -0 -r sh -c 'find "$@" -maxdepth 0 '"${cond} ${LS_ACTION}" _ \
+        < "${PERM_CANDIDATES}" >> "$out" 2>/dev/null || true
 }
 
-classify_candidates "${FS_DIR}/suid_sgid_files.txt" \( -perm -4000 -o -perm -2000 \)
-classify_candidates "${FS_DIR}/world_writable_files.txt" -perm -0002
+classify_candidates "${FS_DIR}/suid_sgid_files.txt" '\( -perm -4000 -o -perm -2000 \)'
+classify_candidates "${FS_DIR}/world_writable_files.txt" '-perm -0002'
 rm -f "${PERM_CANDIDATES}"
 
 # 隠しファイル（ドットファイル）
