@@ -91,7 +91,13 @@ check "scan_incomplete.txt lists what was skipped" test -s "${B}/filesystem/scan
 check "SUID list says it is partial instead of being empty" grep -q '^# PARTIAL RESULT' "${B}/filesystem/suid_sgid_files.txt"
 check "world-writable list says it is partial" grep -q '^# PARTIAL RESULT' "${B}/filesystem/world_writable_files.txt"
 check "manifest counts the cut-off as a warning" grep -Eq '70_filesystem.sh \(warn=[1-9]' "${B}/metadata/manifest.txt"
-check_not "a complete scan carries no partial marker" grep -q '^# PARTIAL RESULT' "${D}/filesystem/suid_sgid_files.txt"
+# 通常実行の側: 注記の有無は scan_incomplete.txt の有無と一致していなければならない。
+# （/opt が巨大なホストでは通常実行でも上限に達するので、「必ず注記なし」とは言えない）
+if [[ -s "${D}/filesystem/scan_incomplete.txt" ]]; then
+    check "normal run hit the budget: its list is marked partial too" grep -q '^# PARTIAL RESULT' "${D}/filesystem/suid_sgid_files.txt"
+else
+    check_not "a complete scan carries no partial marker" grep -q '^# PARTIAL RESULT' "${D}/filesystem/suid_sgid_files.txt"
+fi
 
 echo "== hygiene =="
 check_not "collection does not list itself" grep -rqF "${D}" "${D}/filesystem"
