@@ -203,7 +203,9 @@ LDST="${WORK}/logs_out"
 INV="${LDST}/log_inventory.tsv"; SUM="${LDST}/log_summary.txt"
 check "newest file is collected" test -f "${LDST}/nginx/access.log"
 check "rotated file within the cap is collected" test -f "${LDST}/nginx/access.log.1"
-check "compressed file is copied as-is (same bytes, not expanded)" cmp -s "${LG}/nginx/x.gz" "${LDST}/nginx/x.gz"
+# cmp は diffutils に入っていて、最小構成のイメージには無い。sha256sum は必須コマンド
+check "compressed file is copied as-is (same bytes, not expanded)" \
+    test "$(sha256sum < "${LG}/nginx/x.gz")" = "$(sha256sum < "${LDST}/nginx/x.gz" 2>/dev/null)"
 check_not "file that would exceed the cap is not collected" test -e "${LDST}/nginx/access.log.2.gz"
 check_not "older files after the cut are not collected either (contiguous range)" test -e "${LDST}/nginx/access.log.3.gz"
 check "over-cap files are listed in the inventory" grep -q $'\tover_cap\t.*access.log.2.gz' "${INV}"
