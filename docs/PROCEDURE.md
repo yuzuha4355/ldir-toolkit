@@ -201,6 +201,8 @@ WARN の読み方:
 | `Command failed or timed out: docker info` | Docker は入っているがデーモンが応答しない | 停止中なら正常。想定外なら調査対象 |
 | `/etc/ld.so.preload exists` | 全プロセスにライブラリが注入される設定がある | **優先して調査**。`kernel/ld.so.preload` の内容を確認 |
 | `Module lists in /proc/modules and /sys/module differ` | カーネルモジュールの一覧が食い違う | **優先して調査**。`kernel/modules_in_*.txt` を確認 |
+| `... search stopped at the 60s budget; lists are partial` | fast モードの権限検索が時間切れになった（`/opt` 等が大きい） | `filesystem/scan_incomplete.txt` で未走査の場所を確認。必要なら full で再収集 |
+| `LD_PRELOAD scan of /etc hit the 60s limit` | `/etc` の検索が時間切れになった | 結果は部分的。`kernel/ld.so.preload*` は別途確認済みなので、そちらを優先して見る |
 | `Unknown init system` | init を判別できなかった | コンテナ内では通常 |
 
 ### 4.4 その場での検証

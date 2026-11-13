@@ -50,8 +50,12 @@ find /var/tmp "${LDIR_FIND_PRUNE[@]}" -type f "${LDIR_FIND_LS[@]}" > "${FS_DIR}/
 # SUID/SGID ファイル（権限昇格に悪用される可能性）と
 # ワールドライタブルファイル（脆弱性の可能性）
 #
-# 走査は 1 回にまとめる。別々に find を回すと同じツリーを 2 度歩くことになり、
-# /opt や /usr/local が大きい実機では 1 回あたり 1 分以上かかる。
+# 走査は 1 回にまとめる（別々に find を回すと同じツリーを 2 度歩く）。
+#
+# 所要時間は対象のファイル数に比例する。/opt や /usr/local に数百万ファイルある
+# 実機では、キャッシュが効いていない初回の走査だけで 2 分を超えた。
+# fast モードは初動用なので、この検索全体に時間の上限（既定 60 秒）を設ける。
+# 上限に達した場合は、そこまでの結果を残し、WARN と scan_incomplete.txt で明示する。
 # 1) どちらかの条件に当たるファイルの候補を 1 回の走査で集める
 # 2) 候補（少数）だけを条件ごとに振り分ける
 log_info "Finding SUID/SGID and world-writable files"
@@ -63,11 +67,25 @@ if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
         >> "${PERM_CANDIDATES}" 2>/dev/null || log_debug "find reported errors during permission search"
 else
     # fast mode: focus on common abuse paths
-    for p in /etc /usr/local /opt /tmp /var/tmp /dev/shm; do
+    # 小さく、悪用されやすい場所から先に見る（上限に達しても重要な場所は済んでいる）
+    SCAN_BUDGET="${LDIR_FAST_SCAN_BUDGET:-60}"
+    scan_start=${SECONDS}
+    for p in /tmp /var/tmp /dev/shm /etc /usr/local /opt; do
         [[ -e "$p" ]] || continue
-        find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
-            >> "${PERM_CANDIDATES}" 2>/dev/null || true
+        remaining=$(( SCAN_BUDGET - (SECONDS - scan_start) ))
+        if [[ ${remaining} -le 0 ]]; then
+            echo "$p: not scanned (time budget of ${SCAN_BUDGET}s used up)" >> "${FS_DIR}/scan_incomplete.txt"
+            continue
+        fi
+        run_limited "${remaining}" find "$p" -xdev "${LDIR_FIND_PRUNE[@]}" -type f \( -perm -4000 -o -perm -2000 -o -perm -0002 \) -print0 \
+            >> "${PERM_CANDIDATES}" 2>/dev/null
+        if [[ $? -eq 124 ]]; then
+            echo "$p: partially scanned (time budget of ${SCAN_BUDGET}s used up)" >> "${FS_DIR}/scan_incomplete.txt"
+        fi
     done
+    if [[ -s "${FS_DIR}/scan_incomplete.txt" ]]; then
+        log_warn "[70_filesystem] SUID/SGID and world-writable search stopped at the ${SCAN_BUDGET}s budget; lists are partial (see filesystem/scan_incomplete.txt, or use --mode full)"
+    fi
 fi
 
 # classify_candidates <出力ファイル> <find の条件...>

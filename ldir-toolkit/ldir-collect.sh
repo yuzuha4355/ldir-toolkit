@@ -63,6 +63,8 @@ Environment:
   LDIR_ARCHIVE                 1/0  create tar.gz       (default: 0)
   LDIR_REDACT_SECRETS          1/0  mask token/password values in collected
                                     environment variables (default: 1)
+  LDIR_FAST_SCAN_BUDGET        seconds allowed for the permission search in
+                                    fast mode (default: 60)
   LDIR_VERBOSE                 1/0  also print "not present" notices
 
 Examples:
