@@ -16,7 +16,7 @@ export PATH
 # NOTE: 変数名を VERSION にしないこと。/etc/os-release も VERSION を定義しており、
 #       source されると上書きされる（v0.2.1 でマニフェストに OS のバージョンが
 #       記録されていた原因）。
-LDIR_VERSION="0.3.1"
+LDIR_VERSION="0.3.2"
 export LDIR_VERSION
 
 # スクリプトディレクトリ取得（先に確定）
@@ -302,8 +302,9 @@ for module in "${MODULES[@]}"; do
 done
 
 # 収集統計
-TOTAL_FILES=$(find "${COLLECTION_DIR}" -type f | wc -l)
-TOTAL_SIZE=$(du -sh "${COLLECTION_DIR}" | awk '{print $1}')
+# 統計が取れないことを理由に、ハッシュ生成の手前で止まらないようにする
+TOTAL_FILES=$(find "${COLLECTION_DIR}" -type f 2>/dev/null | wc -l) || TOTAL_FILES="unknown"
+TOTAL_SIZE=$(du -sh "${COLLECTION_DIR}" 2>/dev/null | awk '{print $1}') || TOTAL_SIZE="unknown"
 
 cat >> "${MANIFEST}" << EOF
 

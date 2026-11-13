@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-13
+
+Fixes from an independent review of v0.3.1.
+
+### Security
+- **Secret masking missed plural names.** Variables such as `GITHUB_TOKENS` or `API_TOKENS` were written in clear text: the name rule required that `TOKEN` not be followed by `S` (added in 0.3.0 to spare `MAX_TOKENS`). The rule is now a plain `TOKEN`, as the specification already stated. Collections made with 0.3.0 or 0.3.1 may contain such values in `system/environment_variables.txt`, in `execution/proc_details/*/environ.txt` (full mode) and in `containers/*/inspect/*.json`
+
+### Fixed
+- **Failed collection commands did not reach the manifest.** Commands written as `cmd > file 2>&1` left only an error message in the output file while the module reported `warn=0`. They now go through `capture`, which counts a non-zero exit as a WARN and records a missing command in the output file. A unit test rejects new unchecked redirects
+- **BusyBox `ps` degraded silently**: BSD-style options were ignored and `-o ...,lstart` failed, yet the module reported success. The module now detects a non-procps `ps`, requests the columns it supports, raises a WARN and writes `execution/ps_limited.txt`
+- **A timed-out fast scan left empty SUID/SGID and world-writable lists** that read like "none found". The lists now start with a `# PARTIAL RESULT` note
+- `systemctl` runtime queries are skipped when systemd is not PID 1 (they always failed in containers); `persistence/systemd_not_running.txt` records this
+- A failing `find`/`du` while computing statistics could abort the run before hashes were written
+- A WARN is raised when `timeout` is missing, since the fast-mode budget cannot then interrupt a scan
+- README: wrong module count, a broken leftover table, and links to documents removed in 0.3.0
+
+### Changed
+- `fstab` is copied as a file (`filesystem/fstab.txt`) instead of via `cat`
+- Documentation states that the test suite, `Makefile` and CI are in the repository, not in the release archive, and lists the new known constraints (BusyBox `ps`, non-standard `HostKey` names, missing `timeout`)
+
 ## [0.3.1] - 2026-11-13
 
 Measured on a GitHub-hosted runner VM (systemd and Docker running, large `/opt` and `/usr/local`), where fast mode took 231 seconds.

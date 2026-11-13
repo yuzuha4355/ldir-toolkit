@@ -1,6 +1,6 @@
 # LDIR-Toolkit 仕様書
 
-対象バージョン: 0.3.1
+対象バージョン: 0.3.2
 
 この文書は、収集ツール `ldir-collect.sh` が「何を・どの順で・どこへ」出力するかを定めます。
 実施の手順は [PROCEDURE.md](PROCEDURE.md) を参照してください。
@@ -180,6 +180,7 @@ ldir-collect.sh [options] [output_directory]
 `WARN` には「失敗」のほか「調査担当者に見てほしい所見」も含みます。現在の所見は次の 2 つです。
 
 - `/etc/ld.so.preload` が存在する
+- `ps` が BusyBox 等で、プロセス情報の一部が取れない
 - fast モードの権限検索や `/etc` の検索が時間の上限に達し、結果が部分的である
 - `/proc/modules` と `/sys/module` のモジュール一覧が食い違う
 
@@ -212,6 +213,7 @@ sha256sum -c metadata/file_hashes.txt | grep -v ': OK$'    # 不一致だけ表�
 | ファイル | 内容 |
 |---|---|
 | `running_processes.txt` `running_processes_tree.txt` `process_start_times.txt` | `ps` の各形式 |
+| `ps_limited.txt` | `ps` が procps でない場合（BusyBox 等）のみ。取れない列と読み替え方の説明。この場合ツリー表示とスケジューリング情報は出力されず、開始時刻は経過時間（etime）のみになる |
 | `process_tree.txt` `top_snapshot.txt` | `pstree`、`top` の 1 回分 |
 | `proc_details/<PID>/` | `cmdline.txt` `exe.txt` `cwd.txt` `status.txt`。full では `environ.txt`（マスク対象）`open_files.txt` も |
 | `bash_history_<ユーザー>` `zsh_history_<ユーザー>` | コマンド履歴 |
@@ -292,7 +294,7 @@ sha256sum -c metadata/file_hashes.txt | grep -v ': OK$'    # 不一致だけ表�
 | `modified_last_7days.txt` | 7 日以内に変更されたファイル |
 | `tmp_files.txt` `var_tmp_files.txt` `hidden_files_sensitive.txt` `dev_shm_contents.txt` | 一時領域の内容 |
 | `suid_sgid_files.txt` `world_writable_files.txt` | 権限の観点。fast では `/tmp` `/var/tmp` `/dev/shm` `/etc` `/usr/local` `/opt` の順に、合計 60 秒まで |
-| `scan_incomplete.txt` | 上の検索が時間の上限で打ち切られた場合のみ。見られなかった場所の一覧 |
+| `scan_incomplete.txt` | 上の検索が時間の上限で打ち切られた場合のみ。見られなかった場所の一覧。このとき 2 つの一覧の先頭にも `# PARTIAL RESULT` の注記が入る（空の一覧を「該当なし」と読み違えないため） |
 | `unpackaged_binaries_dpkg.txt` / `_rpm.txt` | パッケージに属さない `/usr/bin` `/usr/sbin` `/usr/local/bin` `/usr/local/sbin` のファイル |
 | `deleted_open_files.txt` | 削除済みだが開かれたままのファイル |
 | `system_binaries_hashes.txt` | full のみ |
@@ -327,8 +329,10 @@ HTTPS_PROXY=http://user:<redacted>@proxy:3128/
 | コンテナ内 PID 1 の環境変数 | `custom_environment/container/docker_env.txt` |
 | コンテナ定義の `Env` | `containers/<cli>/inspect/<ID>.json` |
 
-判定に使う名前: `TOKEN` `SECRET` `PASSW` `CREDENTIAL` `API_KEY` `ACCESS_KEY` `PRIVATE_KEY` `COOKIE` `BEARER` `JWT` `SIGNATURE` `AUTHORIZATION` を含むもの、`_KEY` `_PWD` `_AUTH` で終わるもの。
+判定に使う名前（大文字小文字は区別しない。複数形 `TOKENS` `SECRETS` も含む）: `TOKEN` `SECRET` `PASSW` `CREDENTIAL` `API_KEY` `ACCESS_KEY` `PRIVATE_KEY` `COOKIE` `BEARER` `JWT` `SIGNATURE` `AUTHORIZATION` を含むもの、`_KEY` `_PWD` `_AUTH` で終わるもの。
 あわせて、値に含まれる URL の `ユーザー:パスワード@` 部分。
+
+`MAX_TOKENS` のように秘匿値でない変数も、名前が一致すれば伏せます。漏らすより伏せすぎる側に倒しています。
 
 判定は名前に基づきます。**無関係な名前の変数に入った秘匿値は伏せられません。**
 攻撃者が設定した環境変数そのものを証拠として残したい場合は `--no-redact` を使います。
@@ -377,7 +381,9 @@ ldir-toolkit/
 |---|---|
 | `log_info` `log_warn` `log_error` `log_success` `log_debug` | ログ出力（6.3 節） |
 | `safe_copy <src> <dst>` | 属性を保ったコピー。対象が無ければ DEBUG を残して戻る |
-| `save_command_output <cmd> <file>` | コマンド出力を保存。失敗は WARN |
+| `capture <file> <cmd> [引数...]` | コマンド出力を保存。非 0 終了は WARN、コマンドが無ければファイルにその旨を記録。**モジュールでは `cmd > file 2>&1` を直接書かず、これを使う** |
+| `capture_try <file> <cmd> [引数...]` | 同上だが失敗しても WARN を出さない。`capture_try f A \|\| capture f B` のように代替がある場合に使う |
+| `save_command_output <cmd> <file>` | パイプを含むコマンド文字列を保存。失敗は WARN |
 | `redact_env` | 標準入力の `NAME=VALUE` 行から秘匿値を伏せるフィルタ |
 | `run_limited <秒> <cmd...>` | 時間制限付きで実行 |
 | `have_cmd <名前>` | コマンドの有無 |
@@ -403,6 +409,8 @@ ldir-toolkit/
 | `sudo make smoke` | 実際に収集し、manifest・ハッシュ・アーカイブ・マスク・出力の整合性を確認 | 必要 |
 | `make dist` | 配布用アーカイブを `dist/` に作る | 不要 |
 
+これらはリポジトリにあります。**配布アーカイブには `Makefile`・`tests/`・CI 設定は含まれません。** 実行するにはリポジトリを取得してください。
+
 `make smoke` は実ホストの情報を一時ディレクトリに収集します。コンテナか検証機で実行してください。
 CI（`.github/workflows/ci.yml`）は push と pull request のたびに、lint・単体テスト・10 環境での実収集を行います。
 
@@ -414,4 +422,8 @@ CI（`.github/workflows/ci.yml`）は push と pull request のたびに、lint�
 - コンテナ内部のファイルシステムとログ本体は収集しない（full でログ末尾 1000 行のみ）
 - Kubernetes はノード上のファイルのみ。API サーバーへの問い合わせ（`kubectl`）は行わない
 - `/home` 以外にホームディレクトリを持つユーザーの履歴・設定は収集されない
+- BusyBox の `ps`（Alpine 等）では、プロセスの開始時刻・CPU / メモリ使用率・ツリー表示が取れない。WARN と `execution/ps_limited.txt` で明示する
+- コマンドが「オプションを無視して正常終了する」形で劣化した場合は検出できない。検出できるのは、コマンドが非 0 で終了した場合（WARN）と、存在しない場合（出力ファイルにその旨を記録）
+- fast モードの時間上限は `timeout` コマンドで実現している。`timeout` が無い環境では走査を途中で止められず、上限は場所の切れ目でしか効かない（WARN を出す）
+- SSH のホスト秘密鍵は `/etc/ssh/ssh_host_*_key` という名前で除外している。`sshd_config` の `HostKey` で別の名前を指定している場合、`/etc/ssh` 配下にあればその鍵は収集物に含まれる
 - 収集時刻は対象ホストの時計に基づく。時計のずれは `system/timezone.txt` と手元の記録で確認する

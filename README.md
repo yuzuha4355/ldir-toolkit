@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.3.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -29,11 +29,11 @@ LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. S
 ## Features
 
 - Multi-distribution support (Ubuntu, Debian, Rocky, AlmaLinux, CentOS, Fedora, Amazon Linux, Arch, openSUSE, Gentoo, Alpine, Raspberry Pi OS, Oracle Linux)
-- 10 collection modules: system info, logs, auth (sudoers/SSH/PAM), persistence (cron/systemd), execution history, network, filesystem, web artifacts, custom environment detection, cloud metadata (AWS/GCP/Azure IMDSv2)
+- 12 collection modules, run in order of volatility: system info, processes, network, kernel (modules/eBPF/capabilities), containers, auth (sudoers/SSH/PAM), persistence (cron/systemd), logs, filesystem, web artifacts, custom environment detection, cloud metadata
 - Auto-detection: package managers (apt/yum/dnf/pacman/zypper/apk), init systems (systemd/OpenRC/runit/s6), security frameworks (SELinux/AppArmor)
-- Evidence integrity: SHA256 hashing, manifest generation, execution logging
+- Evidence integrity: SHA256 hashing, manifest with per-module warnings, execution logging
+- Secret-looking environment variable values are masked by default
 - Offline-capable, no network required
-- 26KB package size
 
 ---
 
@@ -99,36 +99,7 @@ sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 Modules run in order of volatility: what disappears first is collected first.
 
 | # | Module | Output | Artifacts |
-|---|--------|--------|-----------|
-| 10 | system_info | `system/` | OS, kernel, hardware, time, environment |
-| 15 | execution | `execution/` | processes, `/proc` details, shell history, auditd |
-| 20 | network | `network/` | connections, listeners, routes, ARP, firewall |
-| 25 | kernel | `kernel/` | kernel modules, eBPF, `ld.so.preload`, file capabilities, sysctl |
-| 30 | containers | `containers/` | Docker / Podman / CRI / Kubernetes node |
-| 40 | auth | `config/` | users, sudoers, PAM, SSH config |
-| 50 | persistence | `persistence/` | systemd, cron, at, init scripts, autostart, shell init files |
-| 60 | logs | `logs/` | journal, syslog, auth logs, login history |
-| 70 | filesystem | `filesystem/` | mounts, recent changes, SUID/SGID, unpackaged binaries |
-| 80 | web | `web/` | browser history, cookies (off in fast mode) |
-| 90 | custom_environment | `custom_environment/` | init system, packages, SELinux/AppArmor |
-| 91 | cloud_metadata | `cloud_metadata/` | AWS / Azure / GCP / OCI / DigitalOcean / Alibaba (off in fast mode) |
-
-Secret-looking environment variable values (tokens, passwords, keys) are masked by default; names are kept.
-Use `--no-redact` to keep them. Private keys and kubeconfigs are never collected. See the specification, section 8.
-
---------|-----------|
-| system_info | uname, hostname, users, groups |
-| logs | syslog, auth.log, journal |
-| auth | sudoers, SSH config, PAM |
-| persistence | cron, systemd units, init scripts |
-| execution | bash_history, process list |
-| network | connections, routing, firewall |
-| filesystem | mounts, recently modified files |
-| web | browser history, cookies |
-| custom_environment | init system, package manager detection |
-| cloud_metadata | AWS/GCP/Azure metadata (IMDSv2) |
-
----
+|---|--------|---
 
 ## Output Structure
 
@@ -226,36 +197,25 @@ Exit status: `0` all modules completed, `1` setup error, `2` at least one module
 
 ## Testing
 
-Docker test environment available:
+The release archive contains the collector and the documents only.
+The test suite, `Makefile`, CI workflows and `docker-test/` live in the repository:
 
 ```bash
 git clone https://github.com/yuzuha4355/ldir-toolkit.git
-cd ldir-toolkit/docker-test
-
-# Test single environment
-./test-single.sh ubuntu
-
-# Test all 11 environments
-docker-compose -f docker-compose-extended.yml build
-./test-all-extended.sh
-./generate_report.sh
+cd ldir-toolkit
+make lint          # shellcheck
+make test          # unit tests, no root needed
+sudo make smoke    # real collection + integrity checks; use a container or test VM
 ```
 
----
-
-## Documentation
-
-- [README_EXTENDED.txt](docs/README_EXTENDED.txt)
-- [DISTRIBUTION_GUIDE.txt](docs/DISTRIBUTION_GUIDE.txt)
-- [QUICKSTART.md](docs/QUICKSTART.md)
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [CHANGELOG.md](CHANGELOG.md)
+CI runs these on every push: unit tests and a real collection in containers for
+10 distributions, plus a real collection on the runner host (systemd and Docker running).
 
 ---
 
 ## Contributing
 
-Contributions welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions welcome. Open an issue or a pull request; `make check` must pass.
 
 ```bash
 git clone https://github.com/yuzuha4355/ldir-toolkit.git
@@ -297,6 +257,8 @@ MIT License - see [LICENSE](LICENSE)
 
 ## Development
 
+These commands need a clone of the repository (they are not in the release archive).
+
 ```bash
 make lint     # shellcheck
 make dist     # release archive + .sha256 in dist/
@@ -305,9 +267,9 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 ```
 
 - Modules are discovered automatically: drop `NN_name.sh` into `ldir-toolkit/modules/` and it runs in numeric order. The number encodes volatility order, and every module must be listed in `docs/SPECIFICATION.md` (a unit test checks this). Each module receives the collection directory as `$1`.
-- Use `safe_copy`, `save_command_output`, `log_*` from `lib/common.sh`. A missing source file is expected and logged as DEBUG; `log_warn` is for things that should have worked.
+- Use `capture`, `safe_copy`, `log_*` from `lib/common.sh`. Do not write `cmd > file 2>&1` directly: a failure would not reach the manifest (a unit test rejects it). A missing source file is expected and logged as DEBUG; `log_warn` is for things that should have worked.
 - Releasing: bump `LDIR_VERSION` in `ldir-collect.sh`, add the CHANGELOG entry, merge to `main`. `.github/workflows/release.yml` then builds and publishes the release if that version has none yet.
-- CI (`.github/workflows/ci.yml`) runs lint, unit tests, and the smoke test inside containers for several distributions.
+- CI (`.github/workflows/ci.yml`) runs lint, unit tests, and the smoke test inside containers for several distributions and on the runner host.
 
 ---
 
@@ -318,5 +280,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.3.1  
+**Version**: 0.3.2  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

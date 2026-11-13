@@ -21,13 +21,13 @@ log_info "[70_filesystem] Starting filesystem information collection"
 
 # マウント情報
 log_info "Collecting mount information"
-mount > "${FS_DIR}/mount_points.txt" 2>&1
-cat /proc/mounts > "${FS_DIR}/proc_mounts.txt" 2>&1
-cat /etc/fstab > "${FS_DIR}/fstab.txt" 2>&1
+capture "${FS_DIR}/mount_points.txt" mount
+capture "${FS_DIR}/proc_mounts.txt" cat /proc/mounts
+safe_copy "/etc/fstab" "${FS_DIR}/fstab.txt"
 
 # ディスク情報
-df -h > "${FS_DIR}/disk_usage_human.txt" 2>&1
-df -i > "${FS_DIR}/disk_inode_usage.txt" 2>&1
+capture "${FS_DIR}/disk_usage_human.txt" df -h
+capture "${FS_DIR}/disk_inode_usage.txt" df -i
 lsblk -f > "${FS_DIR}/block_devices_filesystems.txt" 2>&1 || true
 
 # 最近変更されたファイル
@@ -69,6 +69,10 @@ else
     # fast mode: focus on common abuse paths
     # 小さく、悪用されやすい場所から先に見る（上限に達しても重要な場所は済んでいる）
     SCAN_BUDGET="${LDIR_FAST_SCAN_BUDGET:-60}"
+    if ! have_cmd timeout; then
+        # timeout が無いと走査を途中で止められない。上限は場所の切れ目でしか効かない
+        log_warn "[70_filesystem] 'timeout' is not available; the ${SCAN_BUDGET}s budget cannot interrupt a scan in progress"
+    fi
     scan_start=${SECONDS}
     for p in /tmp /var/tmp /dev/shm /etc /usr/local /opt; do
         [[ -e "$p" ]] || continue
@@ -103,6 +107,19 @@ classify_candidates() {
 
 classify_candidates "${FS_DIR}/suid_sgid_files.txt" '\( -perm -4000 -o -perm -2000 \)'
 classify_candidates "${FS_DIR}/world_writable_files.txt" '-perm -0002'
+
+# 打ち切られた場合は、一覧そのものの先頭に明記する。
+# 空の一覧だけを見た人が「該当なし」と読み違えないようにするため。
+if [[ -s "${FS_DIR}/scan_incomplete.txt" ]]; then
+    for list in "${FS_DIR}/suid_sgid_files.txt" "${FS_DIR}/world_writable_files.txt"; do
+        {
+            echo "# PARTIAL RESULT: the fast-mode time budget ran out before all locations were scanned."
+            echo "# An empty or short list here does NOT mean no such files exist."
+            echo "# Locations not fully scanned are listed in scan_incomplete.txt. Use --mode full for a complete list."
+            cat "$list"
+        } > "${list}.tmp" && mv -f "${list}.tmp" "$list"
+    done
+fi
 rm -f "${PERM_CANDIDATES}"
 
 # 隠しファイル（ドットファイル）

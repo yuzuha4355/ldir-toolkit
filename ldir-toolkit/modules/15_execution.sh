@@ -21,19 +21,39 @@ log_info "[15_execution] Starting execution history collection"
 
 # 現在実行中のプロセス
 log_info "Collecting running processes information"
-ps auxwwf > "${EXEC_DIR}/running_processes_tree.txt" 2>&1
-ps auxww > "${EXEC_DIR}/running_processes.txt" 2>&1
-ps -eo pid,ppid,user,cmd,lstart,etime > "${EXEC_DIR}/process_start_times.txt" 2>&1
-ps -eo pid,tid,class,rtprio,ni,pri,psr,pcpu,stat,wchan:14,comm > "${EXEC_DIR}/process_scheduling.txt" 2>&1
+if ps --version 2>/dev/null | grep -qi procps; then
+    capture "${EXEC_DIR}/running_processes_tree.txt" ps auxwwf
+    capture "${EXEC_DIR}/running_processes.txt" ps auxww
+    capture "${EXEC_DIR}/process_start_times.txt" ps -eo pid,ppid,user,cmd,lstart,etime
+    capture "${EXEC_DIR}/process_scheduling.txt" ps -eo pid,tid,class,rtprio,ni,pri,psr,pcpu,stat,wchan:14,comm
+else
+    # BusyBox 等の ps。BSD 形式のオプション（aux, f）は黙って無視され、
+    # lstart / pcpu などの列も無い。取れる列を明示的に指定し、制約を記録する。
+    # （黙って劣化した出力を「完全に取れた」ように見せない）
+    log_warn "[15_execution] ps is not procps (BusyBox?): no start time, CPU/memory % or tree view; see execution/ps_limited.txt"
+    cat > "${EXEC_DIR}/ps_limited.txt" << 'NOTE'
+The ps on this host is not procps (typically BusyBox).
+- running_processes.txt uses a reduced column set.
+- No absolute start time (lstart): process_start_times.txt has elapsed time (etime) only.
+  Start time = collection time (system/collection_time.txt) minus etime.
+- No tree view and no scheduling columns: running_processes_tree.txt and
+  process_scheduling.txt are not produced. Parent/child links are in the ppid column
+  and in proc_details/<PID>/status.
+NOTE
+    capture_try "${EXEC_DIR}/running_processes.txt" ps -o pid,ppid,user,group,stat,vsz,rss,tty,nice,time,etime,args \
+        || capture "${EXEC_DIR}/running_processes.txt" ps
+    capture_try "${EXEC_DIR}/process_start_times.txt" ps -o pid,ppid,user,etime,args \
+        || echo "etime column not supported by this ps" > "${EXEC_DIR}/process_start_times.txt"
+fi
 
 # プロセスツリー
 if command -v pstree &> /dev/null; then
-    pstree -a > "${EXEC_DIR}/process_tree.txt" 2>&1
-    pstree -p > "${EXEC_DIR}/process_tree_pids.txt" 2>&1
+    capture "${EXEC_DIR}/process_tree.txt" pstree -a
+    capture "${EXEC_DIR}/process_tree_pids.txt" pstree -p
 fi
 
 # top のスナップショット
-top -b -n 1 > "${EXEC_DIR}/top_snapshot.txt" 2>&1
+capture "${EXEC_DIR}/top_snapshot.txt" top -b -n 1
 
 # /proc からのプロセス情報
 log_info "Collecting detailed process information from /proc"
@@ -100,8 +120,8 @@ if [[ -d /var/log/audit/ ]]; then
 fi
 
 # 実行中のサービス
-if command -v systemctl &> /dev/null; then
-    systemctl list-units --type=service --state=running > "${EXEC_DIR}/running_services.txt" 2>&1
+if command -v systemctl &> /dev/null && [[ -d /run/systemd/system ]]; then
+    capture "${EXEC_DIR}/running_services.txt" systemctl list-units --type=service --state=running
 fi
 
 # 開いているファイル

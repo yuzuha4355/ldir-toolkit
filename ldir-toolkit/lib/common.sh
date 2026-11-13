@@ -156,8 +156,11 @@ fi
 #   HTTPS_PROXY=http://u:pw@host/   -> HTTPS_PROXY=http://u:<redacted>@host/
 #   "DB_PASSWORD=x",  (docker inspect の Env 配列) も同じ規則で処理する。
 # LDIR_REDACT_SECRETS=0 で無効化（原本をそのまま残す）。
-# 注意: PWD / OLDPWD / SSH_AUTH_SOCK / XDG_SESSION_ID のような無害な変数を巻き込まないこと
-LDIR_SECRET_NAME_RE='(TOKEN([^S]|$)|SECRET|PASSW|_PWD$|PGPASS|CREDENTIAL|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|_KEY$|^KEY$|AUTHORIZATION|_AUTH$|COOKIE|BEARER|JWT|SIGNATURE)'
+# 注意: PWD / OLDPWD / SSH_AUTH_SOCK / XDG_SESSION_ID のような無害な変数を巻き込まないこと。
+# ただし迷ったら伏せる側に倒す。MAX_TOKENS のような「個数」を避けようとして
+# TOKEN の後ろに条件を付けた結果、GITHUB_TOKENS が平文で残った（v0.3.1 の不具合）。
+# 伏せすぎは --no-redact で取り戻せるが、漏れは取り戻せない。
+LDIR_SECRET_NAME_RE='(TOKEN|SECRET|PASSW|_PWD$|PGPASS|CREDENTIAL|APIKEY|API_KEY|ACCESS_KEY|PRIVATE_KEY|_KEY$|^KEY$|AUTHORIZATION|_AUTH$|COOKIE|BEARER|JWT|SIGNATURE)'
 
 redact_env() {
     if [[ "${LDIR_REDACT_SECRETS:-1}" != "1" ]]; then
@@ -206,6 +209,38 @@ run_limited() {
     else
         "$@"
     fi
+}
+
+# capture <出力ファイル> <コマンド> [引数...]
+# コマンドの出力（標準エラー込み）をファイルに保存する。
+#   - コマンドが無い     : その旨をファイルに書き、DEBUG（最小構成では想定内）
+#   - 非 0 で終了した    : WARN（manifest の warn= に数えられる）
+# 「> file 2>&1」の直書きは、失敗してもエラー文がファイルに入るだけで
+# manifest に現れない。収集の欠落を見逃さないため、原則こちらを使う。
+capture() {
+    local out="$1"; shift
+    local rc=0
+    ensure_dir "$(dirname "$out")" || { log_warn "Failed to create dir for output: $out"; return 1; }
+    if ! have_cmd "$1"; then
+        echo "$1: command not available on this host" > "$out"
+        log_debug "Command not available: $1"
+        return 127
+    fi
+    "$@" > "$out" 2>&1 || rc=$?
+    if [[ ${rc} -ne 0 ]]; then
+        log_warn "Command failed (exit ${rc}): $* -> ${out##*/}"
+    fi
+    return ${rc}
+}
+
+# capture_try: capture と同じだが、失敗しても WARN を出さない。
+# 代替コマンドが後ろに控えている場合に使う:
+#   capture_try "$f" ip addr show || capture "$f" ifconfig -a
+capture_try() {
+    local out="$1"; shift
+    ensure_dir "$(dirname "$out")" || return 1
+    have_cmd "$1" || return 127
+    "$@" > "$out" 2>&1
 }
 
 # コマンド出力を保存（出力ファイルの親ディレクトリを自動作成）
