@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.3.2-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -29,10 +29,11 @@ LDIR-Toolkit collects system artifacts from Linux hosts for forensic analysis. S
 ## Features
 
 - Multi-distribution support (Ubuntu, Debian, Rocky, AlmaLinux, CentOS, Fedora, Amazon Linux, Arch, openSUSE, Gentoo, Alpine, Raspberry Pi OS, Oracle Linux)
-- 12 collection modules, run in order of volatility: system info, processes, network, kernel (modules/eBPF/capabilities), containers, auth (sudoers/SSH/PAM), persistence (cron/systemd), logs, filesystem, web artifacts, custom environment detection, cloud metadata
+- 13 collection modules, run in order of volatility: system info, processes, network, kernel (modules/eBPF/capabilities), containers, virtualization (guest and hypervisor host), auth (sudoers/SSH/PAM), persistence (cron/systemd), logs, filesystem, web artifacts, custom environment detection, cloud metadata
+- Logs from a chosen period (`--log-days 30|60|90`), rotated files included, with a per-log-group size cap; what was not collected is listed, not silently dropped
 - Auto-detection: package managers (apt/yum/dnf/pacman/zypper/apk), init systems (systemd/OpenRC/runit/s6), security frameworks (SELinux/AppArmor)
 - Evidence integrity: SHA256 hashing, manifest with per-module warnings, execution logging
-- Secret-looking environment variable values are masked by default
+- Secret-looking values are masked by default (environment variables, VM definitions, hypervisor configuration); private keys are never written to the output
 - Offline-capable, no network required
 
 ---
@@ -53,7 +54,21 @@ sudo ./ldir-collect.sh --mode full /tmp/ldir_output
 
 # Also pack the result into a tar.gz with a checksum
 sudo ./ldir-collect.sh --archive /mnt/usb/evidence
+
+# Logs from the last 90 days instead of 30 (30, 60 or 90 only)
+sudo ./ldir-collect.sh --log-days 90 --archive /mnt/usb/evidence
 ```
+
+### Log period and size cap
+
+| | fast (default) | full |
+|---|---|---|
+| Period (`--log-days`) | 30 days (60 or 90 on request) | all (unless `--log-days` is given) |
+| Size cap per log group (`--log-max-mb`) | 100 MB | none (unless given) |
+
+The period applies to the journal and to log files, rotated and compressed ones included (copied as they are).
+When a log group (auth, syslog, web server, ...) exceeds the cap, the newest files are kept and the rest are listed in `logs/log_inventory.tsv` with a WARN.
+`logs/log_summary.txt` tells "no log of this kind on the host" (`not_present`) apart from "logs exist, none in the period" (`none_in_period`).
 
 ### Download
 
@@ -99,7 +114,22 @@ sudo ./ldir-collect.sh --archive /mnt/usb/evidence
 Modules run in order of volatility: what disappears first is collected first.
 
 | # | Module | Output | Artifacts |
-|---|--------|---
+|---|---|---|---|
+| 1 | `10_system_info` | `system/` | OS, kernel, hardware, time, environment |
+| 2 | `15_execution` | `execution/` | processes, `/proc` details, command history (bash, zsh, fish, ash, REPLs, `.viminfo`, ...) |
+| 3 | `20_network` | `network/` | connections, listeners, routes, ARP, firewall, DNS |
+| 4 | `25_kernel` | `kernel/` | kernel modules and taint, hidden-module cross-check, eBPF, `ld.so.preload`, capabilities, sysctl |
+| 5 | `30_containers` | `containers/` | Docker, Podman, CRI, Kubernetes node files |
+| 6 | `35_virtualization` | `virtualization/` | is this host a VM (type, guest agents); VMs it runs (libvirt, Proxmox VE, LXC, LXD / Incus, VirtualBox, Xen) |
+| 7 | `40_auth` | `config/` | users, sudoers, PAM, SSH (effective `sshd -T`, `AuthorizedKeysFile`) |
+| 8 | `50_persistence` | `persistence/` | systemd (incl. transient units and generators), cron, at, init, autostart, shell init files |
+| 9 | `60_logs` | `logs/` | journal, auth, syslog, auditd, login records, package, web, database, mail, firewall logs |
+| 10 | `70_filesystem` | `filesystem/` | mounts, recent changes, SUID/SGID, unpackaged binaries |
+| 11 | `80_web` | `web/` | browser artifacts (disabled in fast mode) |
+| 12 | `90_custom_environment` | `custom_environment/` | init, package manager, SELinux / AppArmor details |
+| 13 | `91_cloud_metadata` | `cloud_metadata/` | cloud instance metadata (disabled in fast mode) |
+
+Per-user artifacts are collected for every home directory in the user database (`getent passwd`), not only `/root` and `/home/*`.
 
 ## Output Structure
 
@@ -110,6 +140,7 @@ Modules run in order of volatility: what disappears first is collected first.
 ├── network/               # 20_network
 ├── kernel/                # 25_kernel
 ├── containers/            # 30_containers
+├── virtualization/        # 35_virtualization
 ├── config/                # 40_auth (passwd, sudoers, PAM, SSH)
 ├── persistence/           # 50_persistence
 ├── logs/                  # 60_logs
@@ -128,13 +159,14 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 
 ---
 
-## What's New (v0.3.0)
+## What's New (v0.4.0)
 
-- Collection order follows the order of volatility (processes and network before logs and filesystem)
-- New `kernel` module: kernel modules and taint, hidden-module cross-check, eBPF, `ld.so.preload`, file capabilities
-- New `containers` module: Docker / Podman / CRI / Kubernetes node artifacts
-- Secret values in collected environment variables are masked by default
-- Procedure and specification documents; `make dist` builds the release archive
+- `--log-days 30|60|90` (default 30) and a per-log-group size cap (`--log-max-mb`, default 100 MB): rotated logs are now collected, and every log follows the same period
+- `logs/log_summary.txt` and `logs/log_inventory.tsv` record what was collected, what was over the cap, and what was outside the period
+- New `virtualization` module: VM detection for this host, guest agents, and hypervisor-host artifacts (libvirt, Proxmox VE, LXC, LXD / Incus, VirtualBox, Xen)
+- Users are taken from the user database, so service accounts with homes outside `/home` are covered; more shells' histories, `authorized_keys2`, `AuthorizedKeysFile`
+- Private keys are detected by content and never written to the output medium
+- `journal_7days.txt` is now `journal_period.txt`; audit logs moved to `logs/` (see CHANGELOG for all changes in output paths)
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
 
@@ -280,5 +312,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.3.2  
+**Version**: 0.4.0  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

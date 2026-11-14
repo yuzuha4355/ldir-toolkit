@@ -16,7 +16,7 @@ export PATH
 # NOTE: 変数名を VERSION にしないこと。/etc/os-release も VERSION を定義しており、
 #       source されると上書きされる（v0.2.1 でマニフェストに OS のバージョンが
 #       記録されていた原因）。
-LDIR_VERSION="0.3.2"
+LDIR_VERSION="0.4.0"
 export LDIR_VERSION
 
 # スクリプトディレクトリ取得（先に確定）
@@ -50,7 +50,14 @@ Options:
   -m, --mode MODE     fast (default) or full. Same as LDIR_MODE.
   -a, --archive       Pack the result into <host>_<timestamp>.tar.gz
                       and write a .sha256 next to it. Same as LDIR_ARCHIVE=1.
-      --no-redact     Keep secret-looking environment variable values as-is.
+      --log-days N    Collect logs from the last N days: 30 (default), 60 or 90.
+                      Applies to the journal and to log files, rotated ones included.
+                      Same as LDIR_LOG_DAYS. full mode without this option: no limit.
+      --log-max-mb N  Size cap per log group in MB (default 100; 0 = no cap). Newest
+                      files are kept; what does not fit is listed, not collected.
+                      Same as LDIR_LOG_MAX_MB. full mode without this option: no cap.
+      --no-redact     Keep secret-looking values (environment variables, VM and
+                      hypervisor configuration) as-is.
                       Same as LDIR_REDACT_SECRETS=0. Default is to mask them.
   -l, --list-modules  List collection modules and exit
   -V, --version       Print version and exit
@@ -65,11 +72,16 @@ Environment:
                                     environment variables (default: 1)
   LDIR_FAST_SCAN_BUDGET        seconds allowed for the permission search in
                                     fast mode (default: 60)
+  LDIR_LOG_DAYS                30 | 60 | 90   log period (default: 30 fast, all full)
+  LDIR_LOG_MAX_MB              MB per log group, 0 = no cap
+                                    (default: 100 fast, no cap full)
+  LDIR_VIRT_TIMEOUT            seconds per hypervisor query (default: 20)
   LDIR_VERBOSE                 1/0  also print "not present" notices
 
 Examples:
   sudo $0 /mnt/usb/evidence
   sudo $0 --mode full --archive /mnt/usb/evidence
+  sudo $0 --log-days 90 --archive /mnt/usb/evidence
 
 Verify a collection afterwards:
   cd <output>/<host>_<timestamp> && sha256sum -c metadata/file_hashes.txt
@@ -94,6 +106,9 @@ list_modules() {
 LDIR_MODE="${LDIR_MODE:-fast}"
 LDIR_ARCHIVE="${LDIR_ARCHIVE:-0}"
 LDIR_REDACT_SECRETS="${LDIR_REDACT_SECRETS:-1}"
+# 空 = 利用者の指定なし（モードの既定値を使う）。値の検証は引数解析の後でまとめて行う
+LDIR_LOG_DAYS="${LDIR_LOG_DAYS:-}"
+LDIR_LOG_MAX_MB="${LDIR_LOG_MAX_MB:-}"
 OUTPUT_BASE=""
 
 # 引数解析
@@ -128,6 +143,23 @@ while [[ $# -gt 0 ]]; do
             LDIR_REDACT_SECRETS=0
             shift
             ;;
+        --log-days|--log-max-mb)
+            [[ $# -ge 2 ]] || { log_error "$1 requires an argument"; exit 1; }
+            if [[ "$1" = "--log-days" ]]; then LDIR_LOG_DAYS="$2"; else LDIR_LOG_MAX_MB="$2"; fi
+            # 空の値は「指定なし」と区別できないので、ここで弾く
+            [[ -n "$2" ]] || { log_error "$1 requires a non-empty argument"; exit 1; }
+            shift 2
+            ;;
+        --log-days=*)
+            LDIR_LOG_DAYS="${1#*=}"
+            [[ -n "${LDIR_LOG_DAYS}" ]] || { log_error "--log-days requires a non-empty argument"; exit 1; }
+            shift
+            ;;
+        --log-max-mb=*)
+            LDIR_LOG_MAX_MB="${1#*=}"
+            [[ -n "${LDIR_LOG_MAX_MB}" ]] || { log_error "--log-max-mb requires a non-empty argument"; exit 1; }
+            shift
+            ;;
         --)
             shift
             [[ $# -eq 0 ]] || { OUTPUT_BASE="$1"; shift; }
@@ -158,6 +190,12 @@ case "${LDIR_MODE}" in
         ;;
 esac
 export LDIR_MODE
+
+# ログの期間と容量の上限（30/60/90 日以外は受け付けない）
+if ! ldir_resolve_log_settings; then
+    log_error "${LDIR_SETTINGS_ERROR}"
+    exit 1
+fi
 
 # Feature flags (can be overridden by env)
 # - fast mode defaults to safer/smaller collection
@@ -211,6 +249,7 @@ mkdir -p "${METADATA_DIR}/modules"
 
 log_info "LDIR-Collector Version: ${LDIR_VERSION}"
 log_info "Mode: ${LDIR_MODE} (web=${LDIR_ENABLE_WEB}, cloud_metadata=${LDIR_ENABLE_CLOUD_METADATA}, redact_secrets=${LDIR_REDACT_SECRETS})"
+log_info "Logs: period $(ldir_log_period_text), size cap $(ldir_log_cap_text)"
 log_info "Output directory: ${COLLECTION_DIR}"
 
 # 環境検出ライブラリ読み込み
@@ -218,10 +257,17 @@ if [[ -f "${SCRIPT_DIR}/lib/detect_distro_advanced.sh" ]]; then
     # shellcheck source=lib/detect_distro_advanced.sh
     source "${SCRIPT_DIR}/lib/detect_distro_advanced.sh"
     detect_all
+    detect_virtualization
+    log_info "Virtualization: ${VIRT_TYPE} (${VIRT_SOURCE})"
 else
     log_error "lib/detect_distro_advanced.sh not found"
     exit 1
 fi
+
+# ユーザーのホームディレクトリ（passwd から。モジュールはこの一覧を共有する）
+# 失敗しても収集は止めない（空なら各モジュールが自分で計算する）
+LDIR_USER_HOMES="$(ldir_compute_user_homes)" || LDIR_USER_HOMES=""
+export LDIR_USER_HOMES
 
 # Manifest作成開始
 MANIFEST="${METADATA_DIR}/manifest.txt"
@@ -231,6 +277,9 @@ cat > "${MANIFEST}" << EOF
 Collector Version: ${LDIR_VERSION}
 Collection Mode: ${LDIR_MODE}
 Secret Redaction: ${LDIR_REDACT_SECRETS}
+Log Days: ${LDIR_LOG_DAYS}
+Log Since: ${LDIR_LOG_SINCE:-none (no period limit)}
+Log Size Cap: $(ldir_log_cap_text)
 Collection Time: $(date '+%Y-%m-%d %H:%M:%S %z')
 Collection Time (UTC): $(date -u '+%Y-%m-%dT%H:%M:%SZ')
 Hostname: ${HOST_NAME}
@@ -245,6 +294,7 @@ Architecture: ${ARCH_TYPE:-$(uname -m)} (${ARCH:-$(uname -m)})
 Init System: ${INIT_SYSTEM:-unknown}
 Package Manager: ${PKG_MANAGER:-unknown}
 Container Type: ${CONTAINER_TYPE:-none}
+Virtualization: ${VIRT_TYPE:-unknown} (${VIRT_SOURCE:-not detected})
 SELinux: ${SELINUX_STATUS:-Unknown}
 AppArmor: ${APPARMOR_STATUS:-Unknown}
 

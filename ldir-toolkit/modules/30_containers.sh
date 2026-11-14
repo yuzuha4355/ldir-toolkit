@@ -3,8 +3,10 @@
 # Module: Containers & Kubernetes
 # コンテナ / Kubernetes 収集モジュール
 #
-# このホストが「コンテナを動かす側」である場合の情報を集める。
+# このホストが「アプリケーションコンテナを動かす側」である場合の情報を集める。
 # （このホスト自身がコンテナ内かどうかは 90_custom_environment が扱う）
+# LXC / LXD / Incus / Proxmox のコンテナは VM と一緒に管理されるので
+# 35_virtualization が扱う（v0.3.2 まではここで lxc-ls だけを取っていた）。
 #
 # 方針:
 #   - ランタイムへの問い合わせは時間制限付き（デーモンが応答しない場合に備える）
@@ -53,7 +55,7 @@ collect_docker_like() {
     log_info "[30_containers] ${cli} found"
     ensure_dir "$dir"
 
-    "$cli" --version > "${dir}/version.txt" 2>&1 || true
+    capture "${dir}/version.txt" "$cli" --version
 
     # デーモンに届かなければ、以降の問い合わせは行わない
     if ! out "${dir}/info.txt" "$cli" info; then
@@ -67,21 +69,36 @@ collect_docker_like() {
     out "${dir}/volumes.txt" "$cli" volume ls || true
 
     # コンテナごとの詳細（特権、マウント、capabilities、起動コマンド）
-    local ids id
+    local ids id n=0 f_inspect=0 f_diff=0 f_logs=0 raw
     ids="$(run_limited "${CMD_TIMEOUT}" "$cli" ps -aq --no-trunc 2>/dev/null)" || ids=""
     if [[ -n "$ids" ]]; then
         ensure_dir "${dir}/inspect"
+        raw="${dir}/inspect/.inspect.tmp"
         for id in $ids; do
-            run_limited "${CMD_TIMEOUT}" "$cli" inspect "$id" 2>/dev/null \
-                | redact_env > "${dir}/inspect/${id}.json" || true
+            n=$((n + 1))
+            # inspect は秘匿値を伏せてから書く。失敗した場合に空の .json を
+            # 「取れた」ように残さない（v0.3.2 までは失敗が見えなかった）
+            if run_limited "${CMD_TIMEOUT}" "$cli" inspect "$id" > "$raw" 2>/dev/null; then
+                redact_env < "$raw" > "${dir}/inspect/${id}.json"
+            else
+                f_inspect=$((f_inspect + 1))
+                echo "${cli} inspect failed or timed out" > "${dir}/inspect/${id}.inspect_failed.txt"
+            fi
+            rm -f "$raw"
             # イメージからの変更点（追加・改変されたファイル）
-            run_limited "${CMD_TIMEOUT}" "$cli" diff "$id" > "${dir}/inspect/${id}.diff.txt" 2>/dev/null || true
+            capture_try "${dir}/inspect/${id}.diff.txt" run_limited "${CMD_TIMEOUT}" "$cli" diff "$id" \
+                || f_diff=$((f_diff + 1))
             if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-                run_limited "${CMD_TIMEOUT}" "$cli" top "$id" > "${dir}/inspect/${id}.top.txt" 2>/dev/null || true
-                run_limited "${CMD_TIMEOUT}" "$cli" logs --tail 1000 --timestamps "$id" \
-                    > "${dir}/inspect/${id}.logs_tail.txt" 2>&1 || true
+                # 停止中のコンテナでは top は必ず失敗する（想定内）
+                capture_try "${dir}/inspect/${id}.top.txt" run_limited "${CMD_TIMEOUT}" "$cli" top "$id"
+                capture_try "${dir}/inspect/${id}.logs_tail.txt" \
+                    run_limited "${CMD_TIMEOUT}" "$cli" logs --tail 1000 --timestamps "$id" || f_logs=$((f_logs + 1))
             fi
         done
+        # 失敗はコンテナごとではなく種類ごとに 1 件の WARN にまとめる
+        [[ ${f_inspect} -gt 0 ]] && log_warn "[30_containers] ${cli} inspect failed for ${f_inspect} of ${n} containers (see containers/${cli}/inspect/*.inspect_failed.txt)"
+        [[ ${f_diff} -gt 0 ]] && log_warn "[30_containers] ${cli} diff failed for ${f_diff} of ${n} containers (error text in containers/${cli}/inspect/*.diff.txt)"
+        [[ ${f_logs} -gt 0 ]] && log_warn "[30_containers] ${cli} logs failed for ${f_logs} of ${n} containers"
 
         # 調査で先に見る項目の要約
         "$cli" ps -aq 2>/dev/null | while read -r id; do
@@ -113,9 +130,8 @@ if [[ -d /etc/docker ]]; then
 fi
 if [[ -d /etc/containers ]]; then
     FOUND=1
-    safe_copy "/etc/containers/" "${C_DIR}/config/containers/"
-    # レジストリ認証情報は除外
-    rm -f "${C_DIR}/config/containers/auth.json" 2>/dev/null || true
+    # レジストリ認証情報（auth.json）と鍵は、出力先に一度も書かずに除外する
+    copy_config_tree "/etc/containers" "${C_DIR}/config/containers" "${C_DIR}/excluded_files.txt" 0
 fi
 if [[ -d /etc/containerd ]]; then
     FOUND=1
@@ -128,16 +144,17 @@ fi
 
 # ユーザごとのレジストリ設定は、存在の有無だけ記録する（中身は認証情報）
 {
-    for user_home in /root /home/*; do
+    while IFS=$'\t' read -r _ user_home _; do
+        [[ -n "$user_home" ]] || continue
         for f in "${user_home}/.docker/config.json" "${user_home}/.kube/config"; do
             [[ -e "$f" ]] && ls -l "$f"
         done
-    done
+    done < <(ldir_user_homes)
 } > "${C_DIR}/config/user_credential_files_present.txt" 2>/dev/null || true
 
-# docker グループ（所属ユーザは実質 root）
+# docker グループ（所属ユーザは実質 root）。lxd / incus は 35_virtualization
 if [[ -r /etc/group ]]; then
-    grep -E '^(docker|podman|lxd|incus):' /etc/group > "${C_DIR}/privileged_groups.txt" 2>/dev/null || true
+    grep -E '^(docker|podman):' /etc/group > "${C_DIR}/privileged_groups.txt" 2>/dev/null || true
 fi
 
 # ソケットの権限
@@ -188,14 +205,8 @@ if [[ -d /etc/kubernetes || -d /var/lib/kubelet ]]; then
     fi
 
     if have_cmd journalctl; then
-        run_limited "${CMD_TIMEOUT}" journalctl -u kubelet --no-pager -n 2000 > "${K8S_DIR}/kubelet_journal_tail.txt" 2>&1 || true
+        capture "${K8S_DIR}/kubelet_journal_tail.txt" run_limited "${CMD_TIMEOUT}" journalctl -u kubelet --no-pager -n 2000
     fi
-fi
-
-# --- LXC / LXD ---
-if have_cmd lxc-ls; then
-    FOUND=1
-    out "${C_DIR}/lxc/lxc-ls.txt" lxc-ls --fancy || true
 fi
 
 # プロセスから見たコンテナの痕跡（ランタイム CLI が無い・壊されている場合の手がかり）
@@ -206,7 +217,10 @@ ps -eo pid,ppid,user,args 2>/dev/null \
 
 if [[ ${FOUND} -eq 0 ]]; then
     log_info "[30_containers] No container runtime detected"
-    echo "No container runtime detected on this host" > "${C_DIR}/no_container_runtime.txt"
+    {
+        echo "No application container runtime (Docker / Podman / CRI / Kubernetes) detected on this host."
+        echo "LXC / LXD / Incus / Proxmox containers and virtual machines: see virtualization/."
+    } > "${C_DIR}/no_container_runtime.txt"
 fi
 
 log_success "[30_containers] Container information collection completed"

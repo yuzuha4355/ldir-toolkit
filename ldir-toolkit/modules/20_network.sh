@@ -50,7 +50,7 @@ capture_try "${NET_DIR}/arp_cache.txt" arp -a || capture "${NET_DIR}/arp_cache.t
 
 # ルーティングテーブル
 capture_try "${NET_DIR}/ip_routes.txt" ip route show || capture "${NET_DIR}/routes.txt" route -n
-ip route show table all > "${NET_DIR}/ip_routes_all_tables.txt" 2>&1 || true
+capture "${NET_DIR}/ip_routes_all_tables.txt" ip route show table all
 
 # ネットワークインターフェース詳細
 capture_try "${NET_DIR}/ip_addresses.txt" ip addr show || capture "${NET_DIR}/ip_addresses.txt" ifconfig -a
@@ -64,37 +64,50 @@ safe_copy "/etc/resolv.conf" "${NET_DIR}/"
 safe_copy "/etc/hosts" "${NET_DIR}/"
 safe_copy "/etc/hostname" "${NET_DIR}/"
 safe_copy "/etc/nsswitch.conf" "${NET_DIR}/"
+# TCP Wrappers（sshd 等への接続元制限。書き換えられることがある）
+safe_copy "/etc/hosts.allow" "${NET_DIR}/"
+safe_copy "/etc/hosts.deny" "${NET_DIR}/"
 
 # ファイアウォール設定
+# 失敗は WARN（ファイアウォールの状態が取れていない）。ただしコンテナ内では
+# 権限が無いのが普通なので DEBUG に留める（capture_host）。
 log_info "Collecting firewall configuration"
-if command -v iptables &> /dev/null; then
-    iptables -L -v -n > "${NET_DIR}/iptables_filter.txt" 2>&1 || true
-    iptables -t nat -L -v -n > "${NET_DIR}/iptables_nat.txt" 2>&1 || true
-    iptables -t mangle -L -v -n > "${NET_DIR}/iptables_mangle.txt" 2>&1 || true
-    iptables -t raw -L -v -n > "${NET_DIR}/iptables_raw.txt" 2>&1 || true
-    iptables-save > "${NET_DIR}/iptables_save.txt" 2>&1 || true
+if have_cmd iptables; then
+    capture_host "${NET_DIR}/iptables_filter.txt" iptables -L -v -n
+    capture_host "${NET_DIR}/iptables_nat.txt" iptables -t nat -L -v -n
+    capture_host "${NET_DIR}/iptables_mangle.txt" iptables -t mangle -L -v -n
+    capture_host "${NET_DIR}/iptables_raw.txt" iptables -t raw -L -v -n
+    capture_host "${NET_DIR}/iptables_save.txt" iptables-save
 fi
 
-if command -v ip6tables &> /dev/null; then
-    ip6tables -L -v -n > "${NET_DIR}/ip6tables.txt" 2>&1 || true
+if have_cmd ip6tables; then
+    capture_host "${NET_DIR}/ip6tables.txt" ip6tables -L -v -n
 fi
 
-if command -v ufw &> /dev/null; then
-    ufw status verbose > "${NET_DIR}/ufw_status.txt" 2>&1 || true
+if have_cmd ufw; then
+    capture_host "${NET_DIR}/ufw_status.txt" ufw status verbose
 fi
 
-if command -v firewall-cmd &> /dev/null; then
-    firewall-cmd --list-all > "${NET_DIR}/firewalld_config.txt" 2>&1 || true
+# firewalld が停止中なら firewall-cmd は 252 で終わる。それは状態であって収集の失敗ではない
+if have_cmd firewall-cmd; then
+    capture_try "${NET_DIR}/firewalld_config.txt" firewall-cmd --list-all
+    case $? in
+        0|127) ;;
+        252) log_debug "firewalld is not running" ;;
+        *) log_warn "Command failed: firewall-cmd --list-all -> firewalld_config.txt" ;;
+    esac
 fi
 
 # nftables (新しいファイアウォール)
-if command -v nft &> /dev/null; then
-    nft list ruleset > "${NET_DIR}/nftables_ruleset.txt" 2>&1 || true
+if have_cmd nft; then
+    capture_host "${NET_DIR}/nftables_ruleset.txt" nft list ruleset
 fi
 
-# 確立された接続（プロセス情報付き）
-if command -v lsof &> /dev/null; then
-    lsof -i > "${NET_DIR}/lsof_network_connections.txt" 2>&1 || true
+# 確立された接続（プロセス情報付き）。lsof は該当なしでも 1 で終わる
+if have_cmd lsof; then
+    capture_try "${NET_DIR}/lsof_network_connections.txt" lsof -i \
+        || [[ -s "${NET_DIR}/lsof_network_connections.txt" ]] \
+        || echo "lsof -i: no network files (exit 1 with no output)" > "${NET_DIR}/lsof_network_connections.txt"
 fi
 
 # ネットワークサービス
