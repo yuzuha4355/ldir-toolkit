@@ -33,7 +33,8 @@ if have_cmd getent; then
 fi
 # 各モジュールが調べたホームディレクトリの一覧（調べていない場所が分かるように）
 {
-    printf '# label\thome\tsource (passwd = from the user database, orphan = no passwd entry points here)\n'
+    printf '# label\thome\tsource (passwd = from the user database, orphan = no passwd entry points here)\taccounts with this home\n'
+    printf '# A label "@<path>" means that none of the accounts owns the home (e.g. @_ is /): files from it are named <file owner>@<path>.\n'
     ldir_user_homes
 } > "${AUTH_DIR}/user_homes.tsv"
 if grep -q $'\torphan$' "${AUTH_DIR}/user_homes.tsv"; then
@@ -82,39 +83,54 @@ fi
 [[ -n "${AUTH_KEYS_PATTERNS// /}" ]] || AUTH_KEYS_PATTERNS=".ssh/authorized_keys .ssh/authorized_keys2"
 
 # ユーザごとのSSH設定（ホームは passwd から。/root と /home 以外も対象）
-while IFS=$'\t' read -r username user_home home_src; do
+# ホームの中はリンクをたどらずに写す（ldir_copy_user_files）。~/.ssh 自体がリンクなら中に入らず、
+# リンクとリンク先を config/excluded_files.txt に残す。
+EXCLUDED_AUTH="${AUTH_DIR}/excluded_files.txt"
+while IFS=$'\t' read -r username user_home home_src accounts; do
     [[ -n "${user_home}" ]] || continue
-    dst="${AUTH_DIR}/user_ssh/${username}"
-    if [[ -d "${user_home}/.ssh" ]]; then
-        log_info "Collecting SSH config for user: ${username}"
+    label="$(ldir_item_label "${username}" "${user_home%/}/.ssh")"
+    dst="${AUTH_DIR}/user_ssh/${label}"
+    if [[ -d "${user_home}/.ssh" && ! -L "${user_home}/.ssh" ]]; then
+        log_info "Collecting SSH config for user: ${label}"
         ensure_dir "$dst"
-        # 公開鍵・設定のみ。秘密鍵はコピーしない（名前は ssh_dir_listing.txt に残る）
-        safe_copy "${user_home}/.ssh/authorized_keys" "${dst}/"
-        safe_copy "${user_home}/.ssh/authorized_keys2" "${dst}/"
-        safe_copy "${user_home}/.ssh/known_hosts" "${dst}/"
-        safe_copy "${user_home}/.ssh/config" "${dst}/"
-        # ログイン時に実行される（永続化に使われる）
-        safe_copy "${user_home}/.ssh/rc" "${dst}/"
-        safe_copy "${user_home}/.ssh/environment" "${dst}/"
-        capture "${dst}/ssh_dir_listing.txt" ls -la "${user_home}/.ssh"
+        # ファイル名の一覧（リンクも、リンクのまま並ぶ）
+        capture "${dst}/ssh_dir_listing.txt" ls -la "${user_home%/}/.ssh/"
     fi
-    # AuthorizedKeysFile が既定以外の場所を指している場合
+    # 公開鍵・設定のみ。秘密鍵はコピーしない（名前は ssh_dir_listing.txt に残る）。
+    # rc と environment はログイン時に実行・読み込まれる（永続化に使われる）
+    pairs=()
+    for f in authorized_keys authorized_keys2 known_hosts config rc environment; do
+        pairs+=(".ssh/${f}" "${dst}/${f}")
+    done
+    ldir_copy_user_files "${user_home}" "${username}" "${EXCLUDED_AUTH}" "${pairs[@]}"
+    # AuthorizedKeysFile が既定以外の場所を指している場合。%u は、このホームを持つ
+    # すべてのアカウントで展開する（/root を root と operator が共有する場合など）
+    [[ -n "${accounts:-}" ]] || accounts="${username}"
     for pat in ${AUTH_KEYS_PATTERNS}; do
         [[ "$pat" = "none" ]] && continue
-        # passwd に無いホーム（orphan）はユーザー名が分からないので %u を展開できない
-        [[ "$pat" == *%u* && "${home_src}" != "passwd" ]] && continue
-        f="${pat//%%/%}"
-        f="${f//%h/${user_home}}"
-        f="${f//%u/${username}}"
-        f="${f/#\~/${user_home}}"
-        [[ "$f" = /* ]] || f="${user_home}/${f}"
-        case "$f" in
-            "${user_home}/.ssh/authorized_keys"|"${user_home}/.ssh/authorized_keys2") continue ;;
-        esac
-        if [[ -f "$f" ]]; then
-            flat="${f#/}"
-            safe_copy "$f" "${dst}/authorized_keys_file__${flat//\//_}"
+        users=("${username}")
+        if [[ "$pat" == *%u* ]]; then
+            # passwd に無いホーム（orphan）はユーザー名が分からないので %u を展開できない
+            [[ "${home_src}" = "passwd" ]] || continue
+            IFS=, read -r -a users <<< "${accounts}"
         fi
+        for u in "${users[@]}"; do
+            f="${pat//%%/%}"
+            f="${f//%h/${user_home}}"
+            f="${f//%u/${u}}"
+            f="${f/#\~/${user_home}}"
+            [[ "$f" = /* ]] || f="${user_home%/}/${f}"
+            case "$f" in
+                "${user_home%/}/.ssh/authorized_keys"|"${user_home%/}/.ssh/authorized_keys2") continue ;;
+            esac
+            flat="${f#/}"
+            # ホームの下ならホームから、それ以外は / から、リンクをたどらずに写す
+            if [[ "$f" == "${user_home%/}/"* ]]; then
+                ldir_copy_user_files "${user_home}" "${username}" "${EXCLUDED_AUTH}" "${f#"${user_home%/}/"}" "${dst}/authorized_keys_file__${flat//\//_}"
+            else
+                ldir_copy_user_files / "${username}" "${EXCLUDED_AUTH}" "${flat}" "${dst}/authorized_keys_file__${flat//\//_}"
+            fi
+        done
     done
 done < <(ldir_user_homes)
 

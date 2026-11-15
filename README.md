@@ -65,9 +65,10 @@ sudo ./ldir-collect.sh --log-days 90 --archive /mnt/usb/evidence
 |---|---|---|
 | Period (`--log-days`) | 30 days (60 or 90 on request) | all (unless `--log-days` is given) |
 | Size cap per log group (`--log-max-mb`) | 100 MB | none (unless given) |
+| Size cap for the binary journal (`--journal-max-mb`) | 256 MB | none (unless given) |
 
 The period applies to the journal and to log files, rotated and compressed ones included (copied as they are).
-When a log group (auth, syslog, web server, ...) exceeds the cap, the newest files are kept and the rest are listed in `logs/log_inventory.tsv` with a WARN.
+When a log group (auth, syslog, nginx, ...) exceeds the cap, the newest files are kept and the rest are listed in `logs/log_inventory.tsv` with a WARN. If the newest file alone is over the cap, nothing of that group is taken and the status says so (`newest_over_cap`).
 `logs/log_summary.txt` tells "no log of this kind on the host" (`not_present`) apart from "logs exist, none in the period" (`none_in_period`).
 
 ### Download
@@ -166,6 +167,8 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 - New `virtualization` module: VM detection for this host, guest agents, and hypervisor-host artifacts (libvirt, Proxmox VE, LXC, LXD / Incus, VirtualBox, Xen)
 - Users are taken from the user database, so service accounts with homes outside `/home` are covered; more shells' histories, `authorized_keys2`, `AuthorizedKeysFile`
 - Private keys are detected by content and never written to the output medium
+- Files in users' home directories are copied without following symbolic links: a link, FIFO or device that a user places in their home is recorded (with its target) instead of read, and a history file linked to `/dev/null` is reported as a WARN
+- A full output device stops the remaining modules; the hash list of what was collected is still written and the exit status is 2
 - `journal_7days.txt` is now `journal_period.txt`; audit logs moved to `logs/` (see CHANGELOG for all changes in output paths)
 
 See [CHANGELOG.md](CHANGELOG.md) for details.

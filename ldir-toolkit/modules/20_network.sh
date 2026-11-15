@@ -115,11 +115,11 @@ log_info "Collecting network services configuration"
 safe_copy "/etc/services" "${NET_DIR}/"
 safe_copy "/etc/networks" "${NET_DIR}/"
 
-# NetworkManager設定（デスクトップ環境）
-safe_copy "/etc/NetworkManager/" "${NET_DIR}/NetworkManager/"
-
-# systemd-networkd設定
-safe_copy "/etc/systemd/network/" "${NET_DIR}/systemd-network/"
+# NetworkManager設定（デスクトップ環境）・systemd-networkd設定
+# 接続の定義には Wi-Fi の psk=、VPN の password=、WireGuard の PrivateKey= / private-key= が
+# 平文で入る。v0.4.0 までは丸ごとコピーしていた。値を伏せ、秘密鍵のファイルは書かない
+copy_config_tree "/etc/NetworkManager" "${NET_DIR}/NetworkManager" "${NET_DIR}/excluded_files.txt" 1
+copy_config_tree "/etc/systemd/network" "${NET_DIR}/systemd-network" "${NET_DIR}/excluded_files.txt" 1
 
 log_success "[20_network] Network information collection completed"
 exit 0

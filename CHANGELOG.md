@@ -22,12 +22,22 @@ Log collection with a chosen period and a size cap, a virtualization module, and
 - **Per-user artifacts follow the user database**, not `/root` and `/home/*` only: command history, SSH, user systemd units, autostart, shell init files, browser data and `~/.config`. Directories are named after the user name. A home under `/root` or `/home` with no passwd entry is labelled `orphan-home_<name>`
 - `persistence/shell_init/<user>/` is created only for users that have such files (it used to be created, empty, for every home)
 - History files are copied with their modification time (`cp -a`); 0.3.2 used plain `cp`
-- Single files that are symbolic links (`/etc/resolv.conf`, `/etc/os-release`, `/etc/rc.local` on RHEL, ...) are copied as the content of their target, and the link is recorded in `_symlinks.txt` next to the copy. Up to 0.3.2 the collection held a dangling relative link, which was not hashed either
+- Single files that are symbolic links (`/etc/resolv.conf`, `/etc/os-release`, `/etc/rc.local` on RHEL, ...) are copied as the content of their target **when the link and the directories above it can only be changed by root** (checked by owner and mode, not by path), and the link is recorded in `_symlinks.txt` next to the copy. Up to 0.3.2 the collection held a dangling relative link, which was not hashed either. Links anywhere else are recorded and not followed
+- **Files from users' home directories are never read through a symbolic link**, at any depth: history files, `~/.ssh`, shell init files, user systemd units, autostart entries, browser data, `~/.config` (full), per-user `VirtualBox.xml`, and `AuthorizedKeysFile` targets. Only regular files are copied; links (with their target and the target's type), FIFOs, devices, sockets, files over `LDIR_USER_FILE_MAX_MB` and hard links to another owner's file are listed in the module's `excluded_files.txt` instead. `/opt/*/conf`, `/usr/local/etc` and `/etc/opt` follow the same rules
+- **Log groups are per product**: `web` is now `web_apache`, `web_nginx`, `web_lighttpd`; `db` is `db_mysql`, `db_mariadb`, `db_postgresql`, `db_mongodb`, `db_redis`; `firewall` is `firewall_ufw`, `firewall_firewalld`. One large current Apache log no longer keeps the small nginx logs from being collected
+- A log group whose newest file alone is over the cap has the status `newest_over_cap` (was `capped`), and the WARN says that nothing of the group was collected
+- The binary journal has its own cap, `--journal-max-mb` (default 256 MB in fast mode, none in full). journald lets a file grow to 128 MB, so with the 100 MB log cap the newest journal file was usually over the cap and no binary journal was collected
+- The journal text exports keep the **newest** entries when they reach the entry limit, on every systemd version (`journalctl -r -n N`, then put back in time order). The note at the top says that the oldest entries are missing, and points to the binary journal only when it was actually collected
+- Labels for home directories that none of their accounts owns (`/`, `/bin`, a root-owned `/var/www`, ...) are `<file owner>@<path>`, e.g. `execution/bash_history_root`, instead of the first passwd account with that home. `config/user_homes.tsv` lists all accounts per home
+- `network/NetworkManager/` and `network/systemd-network/` are copied with secret values masked (`psk=`, `password=`, WireGuard `PrivateKey=` / `PresharedKey=`)
+- When the output device fills up, the remaining modules are not run, the hash list of what was collected is written, and the exit status is 2 (see Fixed)
 - Fast-mode SUID/SGID and world-writable search also covers `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin` (when not links into `/usr`) and `/usr/libexec`, before `/usr/local` and `/opt`
 - Commands whose failure was silently ignored now report it: `iptables*`, `ip6tables`, `nft`, `ufw`, `bpftool`, `dmesg` (WARN on a host, DEBUG inside a container), `lscpu`, `lsblk`, `lsmod`, `ip route show table all`, `atq`, `docker/podman --version`, `kubelet` journal. `lsof`, `sysctl -a`, `mokutil` and `firewall-cmd` exit codes are interpreted (no WARN for "nothing found" or "firewalld not running")
 - `--no-redact` also turns off the new masking of VM definitions and hypervisor configuration
 
 ### Added
+- `--journal-max-mb N` / `LDIR_JOURNAL_MAX_MB`, `LDIR_JOURNAL_TEXT_MAX_LINES`, `LDIR_USER_FILE_MAX_MB` (default 100 MB per file from a home directory), `LDIR_USER_COPY_TIMEOUT` (default 60 s fast, 600 s full per copy from a home directory). The manifest records `Journal Size Cap` and `Home File Cap`
+- WARNs for findings in home directories and logs: a history file, log or other file linked to `/dev/null` (being discarded), a link to a file the owner of the home cannot read (a trap for tools running as root), a link to a FIFO or device, a hard link to another owner's file
 - `--log-days 30|60|90` / `LDIR_LOG_DAYS` (default 30; any other value exits with status 1) and `--log-max-mb N` / `LDIR_LOG_MAX_MB` (default 100 MB per log group, 0 = no cap). Full mode has no period and no cap unless these are given. Both are recorded in the manifest (`Log Days`, `Log Since`, `Log Size Cap`)
 - `logs/log_summary.txt` (per log group: `collected`, `capped`, `none_in_period`, `not_present`, `symlink_only`, `copy_failed`) and `logs/log_inventory.tsv` (every file and its decision, including the files not collected because of the cap)
 - Binary journal files (`logs/journal/`, `logs/run_log/journal/`), `logs/journal_auth.txt` (auth/authpriv facility: on hosts without rsyslog this is the only authentication record), `/var/log/cron*` (RHEL), `maillog*`, `boot.log*`, `mariadb/`, `mongodb/`, `redis/`, `lighttpd/`, RHEL PostgreSQL logs under `/var/lib/pgsql`, and `logs/var_log_listing.txt`
@@ -39,6 +49,13 @@ Log collection with a chosen period and a size cap, a virtualization module, and
 - `hosts.allow` / `hosts.deny`, `sudo.conf`, `doas.conf`
 
 ### Fixed
+- **A full output device ended the run with exit status 1 and no hash list** (a failed write under `set -e`). A 4 MB reserve is kept for the hash list; when the device fills, the remaining modules are listed as `not run: output device full` and the run ends with status 2. If even the hash list cannot be written, it is printed on standard output. A partial archive is removed
+- Log files copied only in part (time limit, full device) were reported as collected; they are removed and reported as `copy_failed`. Log files are copied with `cp -a` in a directory pinned with `cd -P` (a file or directory replaced by a link after it was examined is not followed), with the time limit `LDIR_LOG_CMD_TIMEOUT`
+- A log file name containing a newline was split in two and not collected; it is collected and written as `
+` in `log_inventory.tsv`
+- libvirt 9.0 pads `virsh pool-list --name` with spaces: storage pool definitions and volume lists were not collected. Names are trimmed, and a failing `vol-list` on a running pool is a WARN
+- Fedora 41 and later (dnf5): `dnf5.log` was not collected (shown as `not_present`), and `dnf history` / `dnf list installed` failed. `dnf history list` and `dnf list --installed` are used
+- `AuthorizedKeysFile` with `%u` is expanded for every account sharing a home (e.g. `operator` sharing `/root`)
 - **On BusyBox (Alpine) a scan cut off by the fast-mode time budget was not marked partial.** BusyBox `timeout` exits with 143, not 124; `run_limited` now reports 124 for both, so `scan_incomplete.txt` and the `# PARTIAL RESULT` note appear as intended
 - **`docker inspect` failures left an empty `<ID>.json`** that read as "collected". A failure now leaves `<ID>.inspect_failed.txt` and a WARN; `diff` and `logs` failures are counted per kind
 - The unit test that rejects unchecked `cmd > file 2>&1` missed lines ending in `|| true`; it now catches them (deliberate exceptions carry `# ldir:allow`)
@@ -47,6 +64,11 @@ Log collection with a chosen period and a size cap, a virtualization module, and
 ### Security
 - **Private keys are detected by content and never written to the output.** Up to 0.3.2, `/etc/ssh` was copied and `ssh_host_*_key` deleted afterwards, which left the deleted keys recoverable on the output medium, and host keys with other names (`HostKey` in `sshd_config`) were collected. `/etc/containers/auth.json` had the same copy-then-delete pattern. Excluded paths are listed in `excluded_files.txt`
 - Key stores are not collected: `/etc/libvirt/secrets`, `/etc/pve/priv`, `*.key`, `*.keyring`, `*.pw` and similar under the copied configuration trees
+- **A link placed by a user in their home could make the collector copy files the user cannot read**, such as root's or the host's SSH private keys (`~/.bash_history -> /root/.ssh/id_ed25519`). 0.3.2 followed such a link for `~/.bash_history` (plain `cp`); development versions of 0.4.0 followed links for almost every per-user file and for `~/.config` in full mode. Links in home directories are no longer followed, and every copy from a home is also checked for private key content (two independent safeguards). A FIFO or `/dev/zero` behind such a link no longer stops the run or fills the output
+- PGP private key blocks (`-----BEGIN PGP PRIVATE KEY BLOCK-----`) are detected as private keys
+- Environment variables passed to VMs and containers are masked when their name looks secret: libvirt `<qemu:env name=... value=...>`, the LXC driver's `<initenv name=...>`, and `lxc.environment = NAME=value` (LXC and Proxmox). libvirt's SASL password database `passwd.db` is not collected
+- Wi-Fi pre-shared keys, VPN passwords and WireGuard private keys in `/etc/NetworkManager` and `/etc/systemd/network` were copied in clear since 0.3.0; they are masked
+- QEMU `secret` objects remain in clear in process listings (`ps`, `/proc/<PID>/cmdline`); this is now stated in the specification (8.3)
 
 ## [0.3.2] - 2026-11-13
 
