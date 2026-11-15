@@ -1,6 +1,6 @@
 # LDIR-Toolkit 仕様書
 
-対象バージョン: 0.4.0
+対象バージョン: 0.4.1
 
 この文書は、収集ツール `ldir-collect.sh` が「何を・どの順で・どこへ」出力するかを定めます。
 実施の手順は [PROCEDURE.md](PROCEDURE.md) を参照してください。
@@ -92,7 +92,7 @@ ldir-collect.sh [options] [output_directory]
 | `1` | 引数の誤り（`--log-days 45` 等）、root でない、出力先を作れない等。何も収集していない |
 | `2` | 収集は終わったが、失敗したモジュール・動かさなかったモジュールがある（出力先が満杯になった場合を含む）、またはハッシュ一覧・アーカイブの作成に失敗した |
 
-**出力先が満杯になった場合**（0.4.0）: 途中まで収集したものを「何も収集していない」（`1`）とは扱いません。
+**出力先が満杯になった場合**（0.4.1）: 途中まで収集したものを「何も収集していない」（`1`）とは扱いません。
 
 1. 開始時に、ハッシュ一覧を書く余地として 4 MB の予備のファイル（`metadata/.space_reserve`）を置く
 2. モジュールが終わるたびに、新しいファイルを 1 つ書いてみる。書けなければ満杯とみなし、以降のモジュールは動かさない（画面に `the output device is full`）
@@ -316,9 +316,9 @@ sha256sum -c metadata/file_hashes.txt | grep -v ': OK$'    # 不一致だけ表�
 **ユーザーごとの収集**（コマンド履歴、SSH、crontab 以外のユーザー単位の永続化、ブラウザ、`~/.config`）は、passwd（`getent passwd`、無ければ `/etc/passwd`）のホームディレクトリのうち実在するものと、`/root` `/home/*` のうちどの passwd 項目からも参照されていないもの（`orphan-home_<名前>`）を対象にします。
 同じホームを共有するユーザーは 1 度だけ調べます。調べたホームの一覧は `config/user_homes.tsv` です（そのホームを持つアカウントの一覧も入る）。
 
-**名前（ラベル）**: 出力の `<ユーザー>` は、そのホームを持つアカウントのうちホームのディレクトリの持ち主です（通常はそのユーザー）。持ち主がどのアカウントでもないホーム（`/` や `/bin` のように root の持ち物を複数のサービスアカウントがホームにしている、`/var/www` が root の持ち物、等）は、ラベルを `@<ホームのパス>`（`/` は `@_`、`/var/www` は `@_var_www`）とし、出力の名前には**ファイルの持ち主**を前に付けます。例: root が HOME=/ で残した `/.bash_history` は `execution/bash_history_root@_`。0.4.0 の開発版では passwd で先に出てくる名前（Ubuntu では `systemd-network`）を付けていて、持ち主を取り違えるおそれがありました。
+**名前（ラベル）**: 出力の `<ユーザー>` は、そのホームを持つアカウントのうちホームのディレクトリの持ち主です（通常はそのユーザー）。持ち主がどのアカウントでもないホーム（`/` や `/bin` のように root の持ち物を複数のサービスアカウントがホームにしている、`/var/www` が root の持ち物、等）は、ラベルを `@<ホームのパス>`（`/` は `@_`、`/var/www` は `@_var_www`）とし、出力の名前には**ファイルの持ち主**を前に付けます。例: root が HOME=/ で残した `/.bash_history` は `execution/bash_history_root@_`。0.4.0 では passwd で先に出てくる名前（Ubuntu では `systemd-network`）を付けていて、持ち主を取り違えるおそれがありました。
 
-**ホームの中はリンクをたどりません**（0.4.0）。ホームの中身はそのユーザーが自由に作れるので、root で動く本ツールがリンクをたどると、読めないはずのファイル（root やホストの秘密鍵）が収集物に入り、FIFO で止まり、`/dev/zero` で出力先が埋まります。ホームから取るものはすべて次の規則で写します（`ldir_copy_user_files` / `ldir_copy_user_tree`）。
+**ホームの中はリンクをたどりません**（0.4.1）。ホームの中身はそのユーザーが自由に作れるので、root で動く本ツールがリンクをたどると、読めないはずのファイル（root やホストの秘密鍵）が収集物に入り、FIFO で止まり、`/dev/zero` で出力先が埋まります。ホームから取るものはすべて次の規則で写します（`ldir_copy_user_files` / `ldir_copy_user_tree`）。
 
 - ホームより下では、途中のディレクトリを含めてリンクをたどらない。リンクであること、リンク先、リンク先の種別を各モジュールの `excluded_files.txt` に記録するだけ（`~/.config -> /root` なら、その下は見ない）
 - 通常ファイルだけをコピーする。FIFO・デバイス・ソケットは開かない
@@ -357,7 +357,7 @@ auditd のログと `ausearch` の抽出は 0.4.0 で `logs/` に移りました
 `iptables_*.txt` `nftables_ruleset.txt` `ufw_status.txt` `firewalld_config.txt`
 `resolv.conf` `hosts` `hosts.allow` `hosts.deny` `nsswitch.conf` `tcp` `udp`（`/proc/net` の写し）`NetworkManager/` `systemd-network/`
 
-`NetworkManager/` と `systemd-network/` は、秘匿値を伏せて写します（Wi-Fi の `psk=`、VPN の `password=`、WireGuard の `PrivateKey=` `PresharedKey=` `private-key=`。8.1 節）。0.4.0 の開発版までは丸ごとコピーしていました。
+`NetworkManager/` と `systemd-network/` は、秘匿値を伏せて写します（Wi-Fi の `psk=`、VPN の `password=`、WireGuard の `PrivateKey=` `PresharedKey=` `private-key=`。8.1 節）。0.4.0 までは丸ごとコピーしていました。
 
 ### 7.4 `kernel/`
 
@@ -487,7 +487,7 @@ LXC / LXD / Incus / Proxmox VE のコンテナは `virtualization/` が扱いま
 | `mail` | `mail.log*` `mail.err*` `mail.warn*` `mail.info*` `maillog*` | 元の名前のまま |
 | `firewall_ufw` `firewall_firewalld` | `ufw.log*`、`firewalld*` | 〃 |
 
-0.4.0 の開発版では `web` `db` `firewall` を 1 群ずつにしていました。群は製品ごとです（4.1 節）。
+0.4.0 では `web` `db` `firewall` を 1 群ずつにしていました。群は製品ごとです（4.1 節）。
 
 journal のテキスト出力（4.1 節の期間と件数の上限）:
 
@@ -556,7 +556,7 @@ HTTPS_PROXY=http://user:<redacted>@proxy:3128/
 
 `MAX_TOKENS` のように秘匿値でない変数も、名前が一致すれば伏せます。
 
-**VM 定義・ハイパーバイザの設定・ネットワークの設定**（0.4.0）: 上と同じ名前の規則に、`user-data` `vendor-data`（cloud-init）、`environment.*`（LXD / Incus のコンテナに渡す環境変数）、`psk` `PrivateKey` `PresharedKey` `wep-key0`〜（NetworkManager、systemd-networkd、WireGuard）を加えて、次の形の値を伏せます。対象は `/etc/libvirt` `/etc/pve` `/etc/lxc` `/var/lib/lxc/*/config` `/etc/xen` エージェントの設定、`/etc/NetworkManager` `/etc/systemd/network`、管理コマンドの出力です。
+**VM 定義・ハイパーバイザの設定**（0.4.0）・**ネットワークの設定**（0.4.1）: 上と同じ名前の規則に、`user-data` `vendor-data`（cloud-init）、`environment.*`（LXD / Incus のコンテナに渡す環境変数）、`psk` `PrivateKey` `PresharedKey` `wep-key0`〜（NetworkManager、systemd-networkd、WireGuard）を加えて、次の形の値を伏せます。対象は `/etc/libvirt` `/etc/pve` `/etc/lxc` `/var/lib/lxc/*/config` `/etc/xen` エージェントの設定、`/etc/NetworkManager` `/etc/systemd/network`、管理コマンドの出力です。
 
 伏せて書いた写しは、伏せる値が無くても awk を通すため、原本とバイト単位では一致しません（末尾に改行が無いファイルには改行が 1 つ足される）。更新日時は原本に合わせます。原本と突き合わせる必要がある場合は、`--no-redact` で取り直すか、原本のハッシュを別途取ってください。
 
@@ -595,7 +595,7 @@ HTTPS_PROXY=http://user:<redacted>@proxy:3128/
 - 名前で判定するもの: `secrets/` `priv/` の配下、`*.key` `*.pw` `*.keyring` `*.p12` `*.pfx` `*.jks` `*.base64` `authkey` `auth.json` `ssh_host_*_key` `master-key.aes` `passwd.db`（libvirt の SASL のパスワード DB）`*sasldb*`
 - 具体的には: `/etc/libvirt/secrets/`（libvirt の鍵の値）、`/etc/libvirt/passwd.db`、`/etc/pve/priv/`（Proxmox のクラスタ鍵、パスワードハッシュ、API トークン、ストレージのパスワード）、`/etc/pve/**/*.key`（Web UI の TLS 秘密鍵）、`/etc/containers/auth.json`
 - ユーザーの SSH 秘密鍵（`~/.ssh` は公開鍵と設定の決まった名前だけをコピーする。ファイル名の一覧は残る）
-- **ユーザーのホームの中のリンクの先**（7 章冒頭）。0.4.0 の開発版では、一般ユーザーが `~/.ssh/known_hosts -> /etc/ssh/ssh_host_ed25519_key` や `~/.bash_history -> /root/.ssh/id_ed25519` を置くだけで、root で動く本ツールがリンクをたどり、秘密鍵を収集物に書いていた（第三者検証の指摘 1）。いまは、リンクをたどらないことと、中身の秘密鍵の検査の二重で防ぐ。片方が将来壊れても、もう片方で止まる
+- **ユーザーのホームの中のリンクの先**（7 章冒頭）。0.4.0 では、一般ユーザーが `~/.ssh/known_hosts -> /etc/ssh/ssh_host_ed25519_key` や `~/.bash_history -> /root/.ssh/id_ed25519` を置くだけで、root で動く本ツールがリンクをたどり、秘密鍵を収集物に書いていた（第三者検証の指摘 1）。いまは、リンクをたどらないことと、中身の秘密鍵の検査の二重で防ぐ。片方が将来壊れても、もう片方で止まる
 - システム側のリンクは、リンクとその場所が root しか変えられない場合（実際の所有者と権限で確かめる）だけたどる。`/var/log` のように root 以外のグループが書けるディレクトリのリンクはたどらない
 - `~/.docker/config.json`、`~/.kube/config`（存在のみ記録）
 - Kubernetes の秘密鍵と kubeconfig（`/etc/kubernetes/pki/*.key`、`/etc/kubernetes/*.conf`）

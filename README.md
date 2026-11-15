@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -160,6 +160,15 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 
 ---
 
+## What's New (v0.4.1)
+
+**Security fix for v0.4.0. Update from v0.4.0.**
+
+- In v0.4.0 a regular user could make the collector copy root's or the host's SSH private keys into the output, by placing a symbolic link in their own home (for example `~/.bash_history -> /root/.ssh/id_ed25519`). Files in users' home directories are now copied without following symbolic links, and are also checked for private key content. A link, FIFO or device that a user places in their home is recorded (with its target) instead of read, and a history file linked to `/dev/null` is reported as a WARN
+- Journal text exports keep the newest entries on every systemd version; log groups are per product; the binary journal has its own cap (`--journal-max-mb`, default 256 MB)
+- A full output device stops the remaining modules; the hash list of what was collected is still written and the exit status is 2
+- Environment variables in VM and container definitions, and Wi-Fi / VPN / WireGuard secrets in network configuration, are masked
+
 ## What's New (v0.4.0)
 
 - `--log-days 30|60|90` (default 30) and a per-log-group size cap (`--log-max-mb`, default 100 MB): rotated logs are now collected, and every log follows the same period
@@ -167,8 +176,6 @@ With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are writt
 - New `virtualization` module: VM detection for this host, guest agents, and hypervisor-host artifacts (libvirt, Proxmox VE, LXC, LXD / Incus, VirtualBox, Xen)
 - Users are taken from the user database, so service accounts with homes outside `/home` are covered; more shells' histories, `authorized_keys2`, `AuthorizedKeysFile`
 - Private keys are detected by content and never written to the output medium
-- Files in users' home directories are copied without following symbolic links: a link, FIFO or device that a user places in their home is recorded (with its target) instead of read, and a history file linked to `/dev/null` is reported as a WARN
-- A full output device stops the remaining modules; the hash list of what was collected is still written and the exit status is 2
 - `journal_7days.txt` is now `journal_period.txt`; audit logs moved to `logs/` (see CHANGELOG for all changes in output paths)
 
 See [CHANGELOG.md](CHANGELOG.md) for details.
@@ -315,5 +322,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.4.0  
+**Version**: 0.4.1  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)
