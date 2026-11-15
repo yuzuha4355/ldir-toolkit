@@ -60,12 +60,12 @@ if command -v systemctl &> /dev/null; then
     done
     [[ ${#gen_dirs[@]} -gt 0 ]] && capture "${PERSIST_DIR}/systemd_generators_listing.txt" ls -la "${gen_dirs[@]}"
 
-    # ユーザ単位の systemd user units（ホームは passwd から）
+    # ユーザ単位の systemd user units（ホームは passwd から。リンクをたどらずに写す。
+    # リンクで有効化されたユニット（*.wants/ の中）は、リンクとリンク先が記録に残る）
     while IFS=$'\t' read -r username user_home _; do
         [[ -n "$user_home" ]] || continue
-        if [[ -d "${user_home}/.config/systemd/user" ]]; then
-            safe_copy "${user_home}/.config/systemd/user/" "${PERSIST_DIR}/systemd_user_${username}/"
-        fi
+        ldir_copy_user_tree "$user_home" "$username" "${PERSIST_DIR}/excluded_files.txt" \
+            .config/systemd/user "${PERSIST_DIR}/systemd_user_{label}"
     done < <(ldir_user_homes)
 fi
 
@@ -119,8 +119,9 @@ log_info "Collecting desktop autostart configurations"
 safe_copy "/etc/xdg/autostart/" "${PERSIST_DIR}/autostart_system/"
 
 while IFS=$'\t' read -r username user_home _; do
-    [[ -d "${user_home}/.config/autostart" ]] || continue
-    safe_copy "${user_home}/.config/autostart/" "${PERSIST_DIR}/autostart_user_${username}/"
+    [[ -n "$user_home" ]] || continue
+    ldir_copy_user_tree "$user_home" "$username" "${PERSIST_DIR}/excluded_files.txt" \
+        .config/autostart "${PERSIST_DIR}/autostart_user_{label}"
 done < <(ldir_user_homes)
 
 # LD_PRELOAD悪用の検出
@@ -147,10 +148,12 @@ SHELL_INIT_FILES=(
 )
 while IFS=$'\t' read -r username user_home _; do
     [[ -n "$user_home" ]] || continue
+    # リンクはたどらない（ldir_copy_user_files）。たどらなかったものは persistence/excluded_files.txt
+    pairs=()
     for f in "${SHELL_INIT_FILES[@]}"; do
-        [[ -e "${user_home}/${f}" ]] || continue
-        safe_copy "${user_home}/${f}" "${PERSIST_DIR}/shell_init/${username}/${f//\//_}"
+        pairs+=("$f" "${PERSIST_DIR}/shell_init/{label}/${f//\//_}")
     done
+    ldir_copy_user_files "$user_home" "$username" "${PERSIST_DIR}/excluded_files.txt" "${pairs[@]}"
 done < <(ldir_user_homes)
 
 safe_copy "/etc/profile" "${PERSIST_DIR}/"

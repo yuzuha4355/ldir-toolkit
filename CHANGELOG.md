@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-11-16
+
+Fixes from an independent review of v0.4.0 (17 test environments). **Security fix: update from 0.4.0.**
+
+### Security
+- **A link placed by a user in their own home could make the collector copy files the user cannot read**, such as root's or the host's SSH private keys. In 0.4.0, single files that were symbolic links were copied as the content of their target, and this applied to files in home directories too: `~/.ssh/known_hosts -> /etc/ssh/ssh_host_ed25519_key` put the host key into `config/user_ssh/<user>/known_hosts`, `~/.bash_history -> /root/.ssh/id_ed25519` put root's key into `execution/bash_history_<user>`, and in full mode `~/.config -> /root` copied all of `/root`. 0.3.2 followed such a link for `~/.bash_history` only (plain `cp`). Links in home directories are no longer followed at any depth, and every copy from a home is also checked for private key content (two independent safeguards). A FIFO behind such a link no longer stops the run, and `/dev/zero` no longer fills the output. **Collections made with 0.4.0 (and `execution/bash_history_*` from earlier versions) on hosts where users could place such links should be checked with `grep -rlE 'PRIVATE KEY( BLOCK)?-----' <collection>`**
+- PGP private key blocks (`-----BEGIN PGP PRIVATE KEY BLOCK-----`) are detected as private keys. In 0.4.0 an armored PGP secret key under `/etc/ssh` was copied
+- Environment variables passed to VMs and containers are masked when their name looks secret: libvirt `<qemu:env name=... value=...>`, the LXC driver's `<initenv name=...>`, and `lxc.environment = NAME=value` (LXC and Proxmox). In 0.4.0 these were copied in clear while LXD / Incus `environment.*` was masked. libvirt's SASL password database `passwd.db` (and `*sasldb*`) is no longer collected
+- Wi-Fi pre-shared keys, VPN passwords and WireGuard private keys in `/etc/NetworkManager` and `/etc/systemd/network` were copied in clear; they are masked (`network/NetworkManager/`, `network/systemd-network/`)
+- QEMU `secret` objects remain in clear in process listings (`ps`, `/proc/<PID>/cmdline`, `virtualization/hypervisor_processes.tsv`); process listings are primary evidence and are not rewritten. This is now stated in the specification (8.3)
+
+### Changed
+- **Files from users' home directories are never read through a symbolic link**: history files, `~/.ssh`, shell init files, user systemd units, autostart entries, browser data, `~/.config` (full), per-user `VirtualBox.xml`, and `AuthorizedKeysFile` targets. Only regular files are copied, from a directory pinned with `cd -P` (checked with `pwd -P`), with `cp -a` and a check after the copy. Links (with their target and the target's type), FIFOs, devices, sockets, files over `LDIR_USER_FILE_MAX_MB` and hard links to another owner's file are listed in the module's `excluded_files.txt`. `/opt/*/conf`, `/usr/local/etc` and `/etc/opt` follow the same rules. Dotfiles kept as links (`~/.bashrc -> ~/dotfiles/bashrc`) are recorded, not copied
+- System-side symbolic links (`/etc/resolv.conf`, ...) are followed only when the link and the directories above it can be changed by root alone, checked by owner and mode rather than by path. Other links are recorded in `_symlinks.txt` and not followed. Links to a private key, a FIFO or a device are not read
+- **Log groups are per product**: `web` is now `web_apache`, `web_nginx`, `web_lighttpd`; `db` is `db_mysql`, `db_mariadb`, `db_postgresql`, `db_mongodb`, `db_redis`; `firewall` is `firewall_ufw`, `firewall_firewalld`. In 0.4.0 one large current Apache log kept the small nginx logs from being collected
+- A log group whose newest file alone is over the cap has the status `newest_over_cap` (0.4.0: `capped`, with a WARN that spoke of "older" files only), and the WARN says that nothing of the group was collected
+- The binary journal has its own cap, `--journal-max-mb` (default 256 MB in fast mode, none in full). journald lets a file grow to 128 MB, so with the 100 MB log cap the newest journal file was often over the cap and no binary journal was collected
+- **Journal text exports keep the newest entries** when they reach the entry limit, on every systemd version (`journalctl -r -n N`, then put back in time order, multi-line entries kept whole). With `--since` and `-n`, systemd 252 (RHEL 9, Debian 12) keeps the oldest entries, so in 0.4.0 the entries closest to the incident were the ones dropped while the note said the opposite. The note now says that the oldest entries are missing, and points to the binary journal only when it was actually collected
+- Labels for home directories that none of their accounts owns (`/`, `/bin`, a root-owned `/var/www`, ...) are `<file owner>@<path>`, e.g. `execution/bash_history_root@_`. In 0.4.0 they took the first passwd account with that home, so root's `/.bash_history` was named `bash_history_systemd-network`. `config/user_homes.tsv` lists all accounts per home
+- Log files are copied with `cp -a` from a directory pinned with `cd -P` (a file or directory replaced by a link after it was examined is not followed), with the time limit `LDIR_LOG_CMD_TIMEOUT`. A directory link matching a log pattern is followed only when root alone can change it (Ubuntu's `/var/log` is writable by the `syslog` group). A log linked to `/dev/null` is a WARN
+- The manifest records `Journal Size Cap` and `Home File Cap`
+
+### Added
+- `--journal-max-mb N` / `LDIR_JOURNAL_MAX_MB`, `LDIR_JOURNAL_TEXT_MAX_LINES`, `LDIR_USER_FILE_MAX_MB` (default 100 MB per file from a home directory), `LDIR_USER_COPY_TIMEOUT` (default 60 s fast, 600 s full per copy from a home directory)
+- WARNs for findings: a history file, log or other file linked to `/dev/null` (being discarded); a link in a home to a file the owner of the home cannot read (a trap for tools running as root); a link to a FIFO or device; a hard link to another owner's file
+- `excluded_files.txt` in `execution/`, `persistence/`, `web/`, `custom_environment/` and `network/` (reason, path, detail)
+
+### Fixed
+- **A full output device ended the run with exit status 1 and no hash list** (a failed write under `set -e`). A 4 MB reserve is kept for the hash list; when the device fills, the remaining modules are listed as `not run: output device full` and the run ends with status 2. If even the hash list cannot be written, it is printed on standard output. A partial archive is removed
+- Log files and home files copied only in part (time limit, full device) were reported as collected; they are removed and reported as `copy_failed` / in `excluded_files.txt`
+- A log file name containing a newline was split in two and not collected; it is collected and written as `\n` in `log_inventory.tsv`
+- libvirt 9.0 pads `virsh pool-list --name` with spaces: storage pool definitions and volume lists were not collected, and the failed volume list raised no WARN. Names are trimmed, and a failing `vol-list` on a running pool is a WARN
+- Fedora 41 and later (dnf5): `dnf5.log` was not collected (shown as `not_present`), and `dnf history` / `dnf list installed` failed. `dnf history list` and `dnf list --installed` are used
+- `AuthorizedKeysFile` with `%u` is expanded for every account sharing a home (e.g. `operator` sharing `/root`)
+- Documentation: masked copies are not byte-identical to the original (a missing final newline is added); symbolic links inside copied directories are not in `file_hashes.txt` (the archive's `.sha256` covers them); the private key check in the procedure covers the whole collection
+
 ## [0.4.0] - 2026-11-13
 
 Log collection with a chosen period and a size cap, a virtualization module, and fixes for artifacts that looked collected but were not.

@@ -9,7 +9,11 @@ TOOLKIT="${HERE}/../ldir-toolkit"
 source "${HERE}/lib.sh"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "${WORK}"' EXIT
+# TD: root のときだけ使う、root しか書けない場所の作業ディレクトリ（safe_copy のリンクの確認用）
+TD=""
+trap 'rm -rf "${WORK}"; [[ -n "${TD}" ]] && rm -rf "${TD}"' EXIT
+TAB=$'\t'
+NL=$'\n'
 
 OUTPUT_DIR="${WORK}/out"
 mkdir -p "${OUTPUT_DIR}/metadata"
@@ -48,14 +52,43 @@ echo "== safe_copy: symbolic links =="
 echo "real content" > "${WORK}/src/target.conf"
 ln -s target.conf "${WORK}/src/link.conf"
 ln -s missing.conf "${WORK}/src/dangling.conf"
+mkdir -p "${WORK}/src/realdir"; echo inner > "${WORK}/src/realdir/inner.conf"
+ln -s realdir "${WORK}/src/linkdir"
+# WORK は /tmp の下にあり、root 以外も書ける。そこにあるリンクはたどらない
+# （root しか書けない場所かを、パスの見た目ではなく所有者と権限で見る）
 safe_copy "${WORK}/src/link.conf" "${WORK}/s1/"
-check "a symlinked file is copied as its content, not as a link" bash -c "[[ -f '${WORK}/s1/link.conf' && ! -L '${WORK}/s1/link.conf' ]]"
-check "the copy holds the target's content" grep -qx "real content" "${WORK}/s1/link.conf"
-check "the link is recorded in _symlinks.txt" grep -q 'link.conf -> target.conf' "${WORK}/s1/_symlinks.txt"
+check_not "a link in a directory others can write is not followed" test -e "${WORK}/s1/link.conf"
+check "... and is recorded in _symlinks.txt" grep -q 'link.conf -> target.conf: not followed' "${WORK}/s1/_symlinks.txt"
+safe_copy "${WORK}/src/linkdir/" "${WORK}/s1/linkdir/"
+check_not "a directory link with a trailing / is not followed there either" test -e "${WORK}/s1/linkdir/inner.conf"
 : > "${LDIR_MODULE_LOG}"
 check_not "a dangling link returns non-zero" safe_copy "${WORK}/src/dangling.conf" "${WORK}/s1/"
 check "a dangling link is recorded" grep -q 'dangling.conf -> missing.conf: dangling' "${WORK}/s1/_symlinks.txt"
 check_not "a dangling link is not a WARN" grep -q '^\[WARN\]' "${LDIR_MODULE_LOG}"
+if [[ ${EUID} -eq 0 ]]; then
+    # / と TD は root のもので、root 以外は書けない: ここにあるリンクはたどる（/etc/resolv.conf の形）
+    TD="$(mktemp -d /.ldir-unit.XXXXXX)"
+    echo "real content" > "${TD}/target.conf"
+    ln -s target.conf "${TD}/link.conf"
+    printf -- '-----BEGIN PRIVATE KEY-----\ncanary-linkedkey\n-----END PRIVATE KEY-----\n' > "${TD}/key.pem"
+    ln -s key.pem "${TD}/keylink.conf"
+    mkfifo "${TD}/pipe"; ln -s pipe "${TD}/pipelink.conf"
+    ln -s /dev/null "${TD}/nulllink.conf"
+    safe_copy "${TD}/link.conf" "${WORK}/s2/"
+    check "root-only location: a symlinked file is copied as its content, not as a link" bash -c "[[ -f '${WORK}/s2/link.conf' && ! -L '${WORK}/s2/link.conf' ]]"
+    check "root-only location: the copy holds the target's content" grep -qx "real content" "${WORK}/s2/link.conf"
+    check "root-only location: the link is recorded in _symlinks.txt" grep -q "link.conf -> target.conf: copied the target's content" "${WORK}/s2/_symlinks.txt"
+    safe_copy "${TD}/keylink.conf" "${WORK}/s2/"
+    check_not "root-only location: a link to a private key is not copied" grep -rq canary-linkedkey "${WORK}/s2"
+    rc=0; timeout 20 bash -c "source '${TOOLKIT}/lib/common.sh'; safe_copy '${TD}/pipelink.conf' '${WORK}/s2/'" || rc=$?
+    check "root-only location: a link to a FIFO does not hang (exit ${rc})" test "${rc}" -ne 124
+    check_not "root-only location: ... and nothing is copied" test -e "${WORK}/s2/pipelink.conf"
+    : > "${LDIR_MODULE_LOG}"
+    safe_copy "${TD}/nulllink.conf" "${WORK}/s2/"
+    check "a link to /dev/null is a WARN (what is written there is discarded)" grep -q '^\[WARN\].*nulllink.conf.*/dev/null' "${LDIR_MODULE_LOG}"
+else
+    echo "  skip - following links in root-only locations (needs root)"
+fi
 
 echo "== logging =="
 log_warn "something odd"
@@ -112,6 +145,23 @@ check "a YAML block under a secret key is masked as a whole" test "${out}" = "$(
 out="$(printf '{"name":"c1","config":{"user.user-data":"x","limits.cpu":"2"}}' | ldir_json_split | redact_config | tr -d '\n')"
 check "one-line JSON is split and masked" test "${out}" = '{"name":"c1","config":{"user.user-data":"<redacted:1 chars>","limits.cpu":"2"}}'
 check "LDIR_REDACT_SECRETS=0 disables config masking" test "$(printf 'password = x\n' | LDIR_REDACT_SECRETS=0 redact_config)" = 'password = x'
+# 名前と値が別の属性・値の中にある形（検証レポートの指摘 4）
+check "XML name/value pair: qemu:env with a secret name is masked" \
+    test "$(rc_ "<qemu:env name='DB_PASSWORD' value='s3cret'/>")" = "<qemu:env name='DB_PASSWORD' value='<redacted:6 chars>'/>"
+check "XML name/value pair: an ordinary name is kept" \
+    test "$(rc_ "<qemu:env name='LANG' value='C.UTF-8'/>")" = "<qemu:env name='LANG' value='C.UTF-8'/>"
+check "XML name/value pair: the text of <initenv name=...> is masked" \
+    test "$(rc_ "<initenv name='API_TOKEN'>abc</initenv>")" = "<initenv name='API_TOKEN'><redacted:3 chars></initenv>"
+check "lxc.environment = NAME=value is masked by NAME" \
+    test "$(rc_ 'lxc.environment = DB_PASSWORD=s3cret')" = 'lxc.environment = DB_PASSWORD=<redacted:6 chars>'
+check "lxc.environment: NAME=value (Proxmox) is masked by NAME" \
+    test "$(rc_ 'lxc.environment: DB_PASSWORD=s3cret')" = 'lxc.environment: DB_PASSWORD=<redacted:6 chars>'
+check "lxc.environment with an ordinary NAME is kept" test "$(rc_ 'lxc.environment = TZ=UTC')" = 'lxc.environment = TZ=UTC'
+check "the libvirt SASL database passwd.db is excluded by name" ldir_is_secret_path "etc/libvirt/passwd.db"
+# ネットワークの設定（NetworkManager の psk=、WireGuard の PrivateKey= / PresharedKey=）
+check "psk= is masked" test "$(rc_ 'psk=wifi-secret')" = 'psk=<redacted:11 chars>'
+check "WireGuard PrivateKey= is masked" test "$(rc_ 'PrivateKey=abcd')" = 'PrivateKey=<redacted:4 chars>'
+check "WireGuard PresharedKey= is masked" test "$(rc_ 'PresharedKey=abcd')" = 'PresharedKey=<redacted:4 chars>'
 
 echo "== copy_config_tree: secrets are never written =="
 T1="${WORK}/etc_ssh"; mkdir -p "${T1}/sshd_config.d" "${T1}/secrets"
@@ -123,7 +173,9 @@ echo "ssh-ed25519 AAAA" > "${T1}/ssh_host_ed25519_key.pub"
 echo "c2VjcmV0" > "${T1}/secrets/abc.base64"
 echo "<graphics passwd='pw'/>" > "${T1}/vm.xml"
 ln -s sshd_config "${T1}/link"
+printf -- '-----BEGIN PGP PRIVATE KEY BLOCK-----\nCCCC\n-----END PGP PRIVATE KEY BLOCK-----\n' > "${T1}/backup_signing.asc"
 copy_config_tree "${T1}" "${WORK}/ct" "${WORK}/ct_excluded.txt" 1
+check_not "a PGP private key block is not written (finding 12)" test -e "${WORK}/ct/backup_signing.asc"
 check "config files are copied (sshd_config.d included)" test -f "${WORK}/ct/sshd_config.d/10.conf"
 check "public keys are copied" test -f "${WORK}/ct/ssh_host_ed25519_key.pub"
 check_not "a key named ssh_host_*_key is not written" test -e "${WORK}/ct/ssh_host_ed25519_key"
@@ -137,20 +189,32 @@ check_not "no private key material anywhere in the copy" grep -rq 'PRIVATE KEY' 
 echo "== user home directories =="
 H="${WORK}/homes"; mkdir -p "${H}/root" "${H}/home/alice" "${H}/home/ghost" "${H}/srv/svc"
 {
-    echo "root:x:0:0:root:${H}/root:/bin/bash"
+    # ラベルはホームのディレクトリの持ち主のアカウント（指摘 10）。テストではディレクトリの持ち主が
+    # 実行ユーザーなので、root と svc の uid をそれに合わせる
+    echo "root:x:$(id -u):0:root:${H}/root:/bin/bash"
     echo "operator:x:11:0:operator:${H}/root:/sbin/nologin"
     echo "alice:x:1000:1000::${H}/home/alice/:/bin/bash"
-    echo "svc:x:999:999::${H}/srv/svc:/usr/sbin/nologin"
+    echo "svc:x:$(id -u):999::${H}/srv/svc:/usr/sbin/nologin"
     echo "nobody:x:65534:65534::/nonexistent:/usr/sbin/nologin"
 } > "${WORK}/passwd"
 homes="$(ldir_compute_user_homes "${WORK}/passwd" "${H}/root" "${H}/home/alice" "${H}/home/ghost")"
-check "service account home outside /home is included" grep -q $'^svc\t'"${H}/srv/svc"$'\tpasswd$' <<< "${homes}"
+check "service account home outside /home is included" grep -q $'^svc\t'"${H}/srv/svc"$'\tpasswd\tsvc$' <<< "${homes}"
 check "a shared home is listed once" test "$(grep -c "${H}/root" <<< "${homes}")" -eq 1
 check "... under the first user" grep -q $'^root\t'"${H}/root"$'\t' <<< "${homes}"
 check "a trailing slash in passwd does not duplicate the home" test "$(grep -c "${H}/home/alice" <<< "${homes}")" -eq 1
-check "a home without a passwd entry is marked orphan" grep -q $'^orphan-home_ghost\t'"${H}/home/ghost"$'\torphan$' <<< "${homes}"
+check "a home without a passwd entry is marked orphan" grep -q $'^orphan-home_ghost\t'"${H}/home/ghost"$'\torphan\t$' <<< "${homes}"
+check "the accounts sharing a home are listed (root and operator share /root)" grep -q $'^root\t'"${H}/root"$'\tpasswd\troot,operator$' <<< "${homes}"
 check_not "a non-existent home is skipped" grep -q nonexistent <<< "${homes}"
 check "LDIR_USER_HOMES is used when set" test "$(LDIR_USER_HOMES=$'x\t/y\tpasswd' ldir_user_homes)" = $'x\t/y\tpasswd'
+# ホームが / のように、どのアカウントの持ち物でもないホームを複数のアカウントが共有している場合、
+# passwd で先に出てくる名前をラベルにすると、別の利用者の履歴に名前が付く（指摘 10）
+mkdir -p "${WORK}/sharedhome"
+{
+    echo "svc-a:x:60001:60001::${WORK}/sharedhome:/usr/sbin/nologin"
+    echo "svc-b:x:60002:60002::${WORK}/sharedhome:/usr/sbin/nologin"
+} > "${WORK}/passwd_shared"
+homes="$(ldir_compute_user_homes "${WORK}/passwd_shared" "${WORK}/no-such-dir")"
+check_not "a home owned by none of its accounts is not labelled after the first account (finding 10)" grep -q $'^svc-a\t' <<< "${homes}"
 
 echo "== log period and size cap: settings =="
 NOW=1800000000
@@ -180,6 +244,18 @@ for m in abc -1 1.5 99999999; do
     out="$(settings fast "" "${m}")"
     check "rejects --log-max-mb '${m}'" test "${out#ERR }" != "${out}"
 done
+# バイナリの journal は journald の既定で 1 ファイル 128 MB まで育つ。ログ群の既定 100 MB では
+# 最新のファイルが必ず超えるので、別の上限を持つ（指摘 5）
+jset() {
+    (
+        LDIR_MODE="$1" LDIR_JOURNAL_MAX_MB="$2" LDIR_LOG_DAYS="" LDIR_LOG_MAX_MB="" LDIR_LOG_CMD_TIMEOUT=""
+        if ldir_resolve_log_settings "${NOW}"; then echo "${LDIR_JOURNAL_MAX_MB:-unset}"; else echo ERR; fi
+    )
+}
+check "binary journal has its own cap: fast default 256 MB" test "$(jset fast "")" = 256
+check "binary journal cap: full default is no cap" test "$(jset full "")" = 0
+check "binary journal cap: an explicit value is used" test "$(jset fast 50)" = 50
+check "binary journal cap: a non-number is rejected" test "$(jset fast abc)" = ERR
 
 echo "== log period and size cap: collection =="
 # 期間の始まりを 2020-06-01 に固定し、更新日時は touch -t で与える（date -d に依存しない）
@@ -192,6 +268,16 @@ head -c 1000   /dev/zero > "${LG}/nginx/access.log.4.gz"; touch -t 202001010000 
 echo old > "${LG}/old_only/auth.log.9.gz";                touch -t 201901010000 "${LG}/old_only/auth.log.9.gz"
 printf 'gz-bytes\001\002' > "${LG}/nginx/x.gz";           touch -t 202101060000 "${LG}/nginx/x.gz"
 ln -s /dev/stdout "${LG}/nginx/error.log"
+# 改行を含むファイル名（指摘 11）、/dev/null へのリンク（ログを捨てている）
+echo "odd" > "${LG}/nginx/evil${NL}name.log";            touch -t 202101060000 "${LG}/nginx/evil${NL}name.log"
+ln -s /dev/null "${LG}/nginx/discard.log"
+# 最新のファイルが上限を超える群（指摘 5）
+mkdir -p "${LG}/apache2"
+head -c 2097152 /dev/zero > "${LG}/apache2/access.log";  touch -t 202101050000 "${LG}/apache2/access.log"
+echo small > "${LG}/apache2/error.log.1";                 touch -t 202101040000 "${LG}/apache2/error.log.1"
+# root 以外も書ける場所にあるディレクトリへのリンク（/var/log/mysql -> /root の形）
+mkdir -p "${WORK}/outside_logs"; echo canary-linkedlog > "${WORK}/outside_logs/x.log"
+ln -s "${WORK}/outside_logs" "${LG}/mysql"
 LDST="${WORK}/logs_out"
 : > "${LDIR_MODULE_LOG}"
 (
@@ -199,7 +285,17 @@ LDST="${WORK}/logs_out"
     collect_log_group web "${LG}" "${LDST}" "${LDST}" 'nginx'
     collect_log_group auth "${LG}" "${LDST}" "${LDST}" 'old_only/auth.log*'
     collect_log_group mail "${LG}" "${LDST}" "${LDST}" 'mail.log*'
+    collect_log_group web_apache "${LG}" "${LDST}" "${LDST}" 'apache2'
+    collect_log_group db_mysql "${LG}" "${LDST}" "${LDST}" 'mysql'
 )
+check "a file name with a newline is collected whole (finding 11)" test -f "${LDST}/nginx/evil${NL}name.log"
+check "... its inventory line is not split (the newline is written as \\n)" grep -q $'\tcollected\t.*evil\\\\nname.log$' "${LDST}/log_inventory.tsv"
+check_not "... and it is not reported as copy_failed" grep -q $'\tcopy_failed\t' "${LDST}/log_inventory.tsv"
+check "a log linked to /dev/null is a WARN" grep -q '^\[WARN\].*\[web\].*discard.log.*/dev/null' "${LDIR_MODULE_LOG}"
+check "newest file over the cap: status newest_over_cap, not capped (finding 5)" grep -qE '^web_apache +newest_over_cap ' "${LDST}/log_summary.txt"
+check "... the WARN says that nothing of the group was collected" grep -q '^\[WARN\].*\[web_apache\].*newest file.*nothing' "${LDIR_MODULE_LOG}"
+check_not "a directory link in a location others can write is not followed" test -e "${LDST}/mysql/x.log"
+check "... it is listed as a symlink that was not followed" grep -q $'^db_mysql\tsymlink_not_followed\t.*mysql -> ' "${LDST}/log_inventory.tsv"
 INV="${LDST}/log_inventory.tsv"; SUM="${LDST}/log_summary.txt"
 check "newest file is collected" test -f "${LDST}/nginx/access.log"
 check "rotated file within the cap is collected" test -f "${LDST}/nginx/access.log.1"
@@ -228,7 +324,7 @@ check_not "no temporary files are left behind" bash -c "ls -A '${LDST}' | grep -
     LDIR_LOG_SINCE_EPOCH=0 LDIR_LOG_MAX_MB=0
     collect_log_group web "${LG}" "${WORK}/logs_all" "${WORK}/logs_all" 'nginx'
 )
-check "no period and no cap: every file is collected" test "$(find "${WORK}/logs_all/nginx" -type f | wc -l)" -eq 6
+check "no period and no cap: every file is collected" test "$(find "${WORK}/logs_all/nginx" -type f -exec printf x \; | wc -c)" -eq 7
 
 echo "== capture =="
 capture "${WORK}/cap/ok.txt" echo captured
@@ -358,6 +454,11 @@ VL="${WORK}/vr_libvirt"
 mkdir -p "${VL}/etc/libvirt/qemu" "${VL}/etc/libvirt/secrets" "${VL}/run/libvirt" \
          "${VL}/var/log/libvirt/qemu" "${VL}/var/lib/libvirt/images" "${VL}/proc"
 echo "<domain><name>vm1</name><graphics type='vnc' passwd='canary-vncpw'/></domain>" > "${VL}/etc/libvirt/qemu/vm1.xml"
+# 指摘 4: 環境変数の秘匿値（名前と値が別の属性）、LXC の lxc.environment、SASL のパスワード DB
+echo "  <qemu:env name='DB_PASSWORD' value='canary-qemuenv'/>" >> "${VL}/etc/libvirt/qemu/vm1.xml"
+printf 'canary-saslpw' > "${VL}/etc/libvirt/passwd.db"
+mkdir -p "${VL}/var/lib/lxc/web1"
+echo "lxc.environment = DB_PASSWORD=canary-lxcenv" > "${VL}/var/lib/lxc/web1/config"
 echo 'vnc_password = "canary-globalpw"' > "${VL}/etc/libvirt/qemu.conf"
 echo "canary-secretvalue" > "${VL}/etc/libvirt/secrets/0f0f.base64"
 : > "${VL}/run/libvirt/libvirt-sock"
@@ -373,18 +474,20 @@ case "$1" in
     list)     case "$*" in *--uuid*) echo "11111111-2222-3333-4444-555555555555"; echo "" ;;
                                *) echo " Id   Name   State"; echo " 1    vm1    running" ;; esac ;;
     net-list) case "$*" in *--name*) echo "default" ;; *) echo " default active" ;; esac ;;
-    pool-list) case "$*" in *--name*) echo "images" ;; *) echo " images active" ;; esac ;;
+    # libvirt 9.0 は --name の出力の後ろに空白を詰める（指摘 8）
+    pool-list) case "$*" in *--name*) echo "images              " ;; *) echo " images active" ;; esac ;;
     secret-list) echo " 0f0f  volume /var/lib/libvirt/images/vm1.qcow2" ;;
     dominfo)  echo "Name: vm1" ;;
-    dumpxml)  echo "<domain><graphics type='spice' passwd='canary-livepw'/></domain>" ;;
+    dumpxml)  echo "<domain><graphics type='spice' passwd='canary-livepw'/><qemu:env name='API_TOKEN' value='canary-liveenv'/></domain>" ;;
     domblklist) printf ' Type   Device   Target   Source\n------------------------------------\n file   disk     vda      /var/lib/libvirt/images/vm1.qcow2\n file   cdrom    sda      -\n' ;;
     domiflist) echo " vnet0 network default virtio" ;;
     snapshot-list) case "$*" in *--name*) echo "before upgrade" ;; *) echo " before upgrade  2026-01-01" ;; esac ;;
     snapshot-dumpxml) echo "<domainsnapshot><domain><graphics passwd='canary-snappw'/></domain></domainsnapshot>" ;;
     net-dumpxml) echo "<network><name>default</name></network>" ;;
     net-dhcp-leases) echo " 52:54:00:00:00:01 192.168.122.10" ;;
-    pool-dumpxml) echo "<pool type='dir'/>" ;;
-    vol-list) echo " vm1.qcow2" ;;
+    pool-dumpxml) [ "$2" = images ] || { echo "error: Storage pool not found: $2" >&2; exit 1; }; echo "<pool type='dir'/>" ;;
+    pool-info) echo "State:          running" ;;
+    vol-list) [ "$2" = images ] && [ -z "$MOCK_VOLFAIL" ] || { echo "error: failed to get pool $2" >&2; exit 1; }; echo " vm1.qcow2" ;;
     *) echo "mock virsh: unknown $1" >&2; exit 1 ;;
 esac
 MOCKEOF
@@ -405,8 +508,14 @@ check_not "libvirt (mock): disk image content is not copied" bash -c "find '${WO
 check "libvirt (mock): network DHCP leases" grep -q 192.168.122.10 "${LV}/networks/default.dhcp_leases.txt"
 check "libvirt (mock): libvirt logs follow the log rules" test -f "${LV}/logs/qemu/vm1.log"
 check "libvirt (mock): ... and appear in the log summary" grep -qE '^libvirt +collected ' "${WORK}/vo_lv/virtualization/log_summary.txt"
-check_not "libvirt (mock): no secret value anywhere in the output" grep -rqE 'canary-(vncpw|globalpw|secretvalue|livepw|snappw)' "${WORK}/vo_lv/virtualization"
+check_not "libvirt (mock): no secret value anywhere in the output" grep -rqE 'canary-(vncpw|globalpw|secretvalue|livepw|snappw|qemuenv|liveenv|saslpw|lxcenv)' "${WORK}/vo_lv/virtualization"
 check_not "libvirt (mock): no WARN" grep -q '^\[WARN\]' "${WORK}/vo_lv/module.log"
+check "libvirt (mock): a pool name padded with spaces is trimmed (finding 8)" test -s "${LV}/storage_pools/images.xml"
+check "libvirt (mock): ... and its volume list is collected" grep -q vm1.qcow2 "${LV}/storage_pools/images.volumes.txt"
+rc=0; run_virt "${VL}" "${WORK}/vo_volfail" "${MOCK}" MOCK_VOLFAIL=1 || rc=$?
+check "libvirt (mock): a failing vol-list on a running pool is a WARN (finding 8)" grep -q '^\[WARN\].*vol-list' "${WORK}/vo_volfail/module.log"
+check "libvirt (mock): LXC lxc.environment secret is masked in the container config (finding 4)" \
+    grep -q '^lxc.environment = DB_PASSWORD=<redacted' "${LV%/libvirt}/lxc/containers/web1.config"
 check_not "libvirt (mock): no_hypervisor_detected.txt is not written" test -e "${WORK}/vo_lv/virtualization/no_hypervisor_detected.txt"
 
 start=${SECONDS}
@@ -425,6 +534,8 @@ printf -- '-----BEGIN PRIVATE KEY-----\ncanary-sslkey\n-----END PRIVATE KEY-----
 printf -- '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n' > "${VP}/etc/pve/nodes/n1/pve-ssl.pem"
 printf 'name: vm100\ncipassword: canary-cipw\nsshkeys: ssh-ed25519%%20AAAA\n\n[snap1]\ncipassword: canary-cipw-snap\n' \
     > "${VP}/etc/pve/nodes/n1/qemu-server/100.conf"
+mkdir -p "${VP}/etc/pve/nodes/n1/lxc"
+echo "lxc.environment: DB_PASSWORD=canary-pveenv" > "${VP}/etc/pve/nodes/n1/lxc/101.conf"
 ln -s nodes/n1/qemu-server "${VP}/etc/pve/qemu-server"
 echo "task log" > "${VP}/var/log/pve/tasks/A/UPID:n1:0000:0000:65000000:qmstart:100:root@pam:"
 echo "GET /api2/json" > "${VP}/var/log/pveproxy/access.log"
@@ -442,7 +553,7 @@ check "Proxmox (mock): the node's certificate is copied" test -f "${PV}/etc_pve/
 check "Proxmox (mock): qm list" grep -q vm100 "${PV}/qm_list.txt"
 check "Proxmox (mock): task logs" test -f "${PV}/tasks/A/UPID:n1:0000:0000:65000000:qmstart:100:root@pam:"
 check "Proxmox (mock): API access log" test -f "${PV}/pveproxy/access.log"
-check_not "Proxmox (mock): no secret value anywhere in the output" grep -rqE 'canary-(authkey|shadow|sslkey|cipw)' "${WORK}/vo_pve/virtualization"
+check_not "Proxmox (mock): no secret value anywhere in the output" grep -rqE 'canary-(authkey|shadow|sslkey|cipw|pveenv)' "${WORK}/vo_pve/virtualization"
 
 # Incus のモック: API ソケットと curl。user-data と environment.* を伏せる
 VI="${WORK}/vr_incus"
@@ -466,6 +577,154 @@ check "Incus (mock): security settings are kept" grep -q '"security.privileged":
 check_not "Incus (mock): user-data and environment values are masked" grep -rqE 'canary-(ud|env)' "${WORK}/vo_incus/virtualization"
 check "Incus (mock): trusted certificates are listed" test -f "${IV}/certificates.json"
 
+echo "== user homes: links, FIFOs and devices are not followed (findings 1, 2, 7) =="
+# 対象ホストの一般ユーザーは、自分のホームに何でも置ける。root で動く収集がそれをたどると、
+# 読めないはずのファイルが収集物に入り、FIFO で止まり、/dev/zero で出力先が埋まる。
+# モジュールは 60 秒とファイルサイズ 40 MB の上限を付けて動かす（直っていないと永久に止まる・埋まるため）
+TR="${WORK}/trap"
+mkdir -p "${TR}/outside" "${TR}/home/bob/.ssh" "${TR}/home/bob/.config/autostart" "${TR}/home/bob/.VirtualBox" "${TR}/home/carol"
+printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\ncanary-userkey\n-----END OPENSSH PRIVATE KEY-----\n' > "${TR}/outside/id_ed25519"
+echo "canary-rootonly" > "${TR}/outside/root_only.txt"
+echo "canary-rootonly-ak" > "${TR}/outside/authorized_keys"
+mkfifo "${TR}/outside/x.fifo"
+B="${TR}/home/bob"
+ln -s ../../../outside/id_ed25519 "${B}/.ssh/known_hosts"
+echo "ssh-ed25519 AAAA bob@ok" > "${B}/.ssh/authorized_keys"
+ln -s "${TR}/outside/root_only.txt" "${B}/.ssh/config"
+ln -s "${TR}/outside/id_ed25519" "${B}/.bash_history"
+ln -s /dev/null "${B}/.zsh_history"
+ln -s "${TR}/outside/x.fifo" "${B}/.python_history"
+ln -s /dev/zero "${B}/.lesshst"
+mkfifo "${B}/.mysql_history"
+echo "echo ldir-ok-history" > "${B}/.ash_history"
+printf -- '-----BEGIN PGP PRIVATE KEY BLOCK-----\ncanary-pgp\n-----END PGP PRIVATE KEY BLOCK-----\n' > "${B}/.sqlite_history"
+head -c 2097152 /dev/zero | tr '\0' x > "${B}/.node_repl_history"
+ln -s "${TR}/outside/root_only.txt" "${B}/.bashrc"
+echo "export LDIR_OK=1" > "${B}/.profile"
+echo "[Desktop Entry]" > "${B}/.config/autostart/ok.desktop"
+ln -s "${TR}/outside/id_ed25519" "${B}/.config/autostart/evil.desktop"
+mkfifo "${B}/.config/autostart/pipe.desktop"
+ln -s "${TR}/outside/root_only.txt" "${B}/.VirtualBox/VirtualBox.xml"
+ln -s "${TR}/outside" "${TR}/home/carol/.config"
+ln -s "${TR}/outside" "${TR}/home/carol/.ssh"
+TRAP_HOMES="bob${TAB}${B}${TAB}passwd${NL}carol${TAB}${TR}/home/carol${TAB}passwd"
+# run_mod <モジュール> <出力> [環境変数...]: 時間（60 秒）とファイルサイズ（40 MB）の上限付きで実行
+run_mod() {
+    local mod="$1" out="$2"; shift 2
+    mkdir -p "${out}/metadata"
+    (
+        ulimit -f 40960 2>/dev/null
+        env LDIR_MODULE="${mod}" LDIR_MODULE_LOG="${out}/${mod%.sh}.log" "$@" \
+            timeout 60 bash "${TOOLKIT}/modules/${mod}" "${out}" > "${out}/${mod%.sh}.stdout" 2>&1
+    )
+}
+TO="${WORK}/trap_out"
+for mod in 15_execution.sh 35_virtualization.sh 40_auth.sh 50_persistence.sh; do
+    rc=0; run_mod "${mod}" "${TO}" LDIR_USER_HOMES="${TRAP_HOMES}" LDIR_MODE=fast LDIR_USER_FILE_MAX_MB=1 || rc=$?
+    check "traps: ${mod} finishes and exits 0 (got ${rc}; 124 = stopped by the test's 60s limit)" test "${rc}" -eq 0
+done
+rc=0; run_mod 90_custom_environment.sh "${TO}" LDIR_USER_HOMES="${TRAP_HOMES}" LDIR_MODE=full || rc=$?
+check "traps: 90_custom_environment.sh (full mode) finishes and exits 0 (got ${rc})" test "${rc}" -eq 0
+check_not "traps: no private key content anywhere in the output" grep -rlE -- 'PRIVATE KEY( BLOCK)?-----' "${TO}"
+check_not "traps: the target of a link to a key is nowhere in the output" grep -rqF canary-userkey "${TO}"
+check_not "traps: files reached through links are nowhere in the output" grep -rqF canary-rootonly "${TO}"
+check_not "traps: a PGP private key block in a history file is not copied" grep -rqF canary-pgp "${TO}"
+# ホームから写したものの置き場だけを見る（lsof_all.txt 等、ホストの状態の出力は実機では 1 MB を超える）
+big="$(find "${TO}/execution/user_history" "${TO}/config/user_ssh" "${TO}/persistence/shell_init" \
+    -type f -size +1024k 2>/dev/null | head -3)"
+check "traps: /dev/zero and the file over the size cap left no large file (${big:-none})" test -z "${big}"
+check_not "traps: nothing was written for the links to /dev/zero and the over-cap file" \
+    bash -c "find '${TO}' -name .lesshst -o -name .node_repl_history | grep -q ."
+check "traps: an ordinary history file is still copied" grep -qx "echo ldir-ok-history" "${TO}/execution/user_history/bob/.ash_history"
+check "traps: an ordinary authorized_keys is still copied" grep -q "bob@ok" "${TO}/config/user_ssh/bob/authorized_keys"
+check "traps: an ordinary shell init file is still copied" test -f "${TO}/persistence/shell_init/bob/.profile"
+check "traps: an ordinary autostart entry is still copied" test -f "${TO}/persistence/autostart_user_bob/ok.desktop"
+EX="${TO}/execution/excluded_files.txt"
+check "traps: a link is recorded with its target and the target's type" \
+    bash -c "grep -F '${B}/.bash_history -> ${TR}/outside/id_ed25519' '${EX}' | grep -q 'regular file'"
+check "traps: a link to a FIFO is recorded with the type fifo" bash -c "grep -F '.python_history -> ' '${EX}' | grep -q fifo"
+check "traps: a link to /dev/zero is recorded as a character device" bash -c "grep -F '.lesshst -> /dev/zero' '${EX}' | grep -q 'character device'"
+check "traps: a FIFO in place of a history file is recorded" bash -c "grep -F '.mysql_history' '${EX}' | grep -q fifo"
+check "traps: a link to /dev/null is recorded" grep -qF '.zsh_history -> /dev/null' "${EX}"
+check "traps: ... and is a WARN (history is being discarded)" grep -q '^\[WARN\].*\.zsh_history.*/dev/null' "${TO}/15_execution.log"
+check "traps: a file over the size cap is recorded" grep -q $'^over_size_cap\t.*\.node_repl_history' "${EX}"
+check "traps: ... and is a WARN" grep -q '^\[WARN\].*\.node_repl_history' "${TO}/15_execution.log"
+check "traps: a private key in a history file is recorded, not copied" grep -q $'^secret\t.*\.sqlite_history' "${EX}"
+check "traps: SSH: the known_hosts link is recorded" grep -qF '.ssh/known_hosts -> ' "${TO}/config/excluded_files.txt"
+check "traps: SSH: a linked ~/.ssh is recorded and not entered" grep -qF "carol/.ssh -> ${TR}/outside" "${TO}/config/excluded_files.txt"
+check "traps: autostart: a link inside the directory is recorded" grep -qF 'evil.desktop -> ' "${TO}/persistence/excluded_files.txt"
+check_not "traps: autostart: a FIFO inside the directory is not copied" test -e "${TO}/persistence/autostart_user_bob/pipe.desktop"
+check "traps: VirtualBox: a linked VirtualBox.xml is recorded" grep -qF '.VirtualBox/VirtualBox.xml -> ' "${TO}/virtualization/excluded_files.txt"
+check "traps: full mode: a linked ~/.config is recorded" grep -qF "carol/.config -> ${TR}/outside" "${TO}/custom_environment/excluded_files.txt"
+check_not "traps: full mode: nothing behind the link is copied" test -e "${TO}/custom_environment/custom_configs/user_config_carol"
+if [[ ${EUID} -eq 0 ]]; then
+    # 別の持ち主のファイルへのハードリンク（fs.protected_hardlinks=0 なら一般ユーザーが作れる）
+    mkdir -p "${TR}/home/dave"; chown 4321:4321 "${TR}/home/dave"
+    echo "canary-hardlinked" > "${TR}/outside/root_secret"; chmod 600 "${TR}/outside/root_secret"
+    ln "${TR}/outside/root_secret" "${TR}/home/dave/.bash_history"
+    ln -s "${TR}/outside/root_secret" "${TR}/home/dave/.viminfo"
+    chown -h 4321:4321 "${TR}/home/dave/.viminfo"
+    TOD="${WORK}/trap_out_dave"
+    rc=0; run_mod 15_execution.sh "${TOD}" LDIR_USER_HOMES="dave${TAB}${TR}/home/dave${TAB}passwd" || rc=$?
+    check_not "traps (root): a hard link to another owner's file is not copied" grep -rqF canary-hardlinked "${TOD}"
+    check "traps (root): ... it is recorded" grep -q $'^hardlink_other_owner\t.*dave/\.bash_history' "${TOD}/execution/excluded_files.txt"
+    check "traps (root): a link to a file the user cannot read is a WARN" grep -q '^\[WARN\].*dave/\.viminfo.*cannot read' "${TOD}/15_execution.log"
+else
+    echo "  skip - hard links to another owner's file (needs root)"
+fi
+
+echo "== user homes: shared homes are labelled by the file owner (finding 10) =="
+echo "echo shared-home-history" > "${WORK}/sharedhome/.bash_history"
+TOS="${WORK}/shared_out"
+rc=0; run_mod 15_execution.sh "${TOS}" LDIR_USER_HOMES="$(ldir_compute_user_homes "${WORK}/passwd_shared" "${WORK}/no-such-dir")" || rc=$?
+me="$(id -un 2>/dev/null || echo "uid$(id -u)")"
+check_not "the history in a shared home is not named after the first account" test -e "${TOS}/execution/bash_history_svc-a"
+check "it is named after the owner of the file and the home" bash -c "ls '${TOS}/execution/' | grep -q '^bash_history_${me}@'"
+
+echo "== 60_logs: journal text keeps the newest entries; groups per product (findings 3, 5, 9) =="
+# systemd 252 の挙動を真似る journalctl: --since と -n を併せると、古い側の n 件を出す。
+# -r（新しい順）なら新しい側の n 件。6000 件のうち 5990 件目は 2 行にわたる
+JMOCK="${WORK}/jmock"; mkdir -p "${JMOCK}"
+cat > "${JMOCK}/journalctl" << 'MOCKEOF'
+#!/bin/sh
+rev=0; n=0; prev=""
+for a; do
+    case "$prev" in -n) n="$a" ;; esac
+    case "$a" in -r|--reverse) rev=1 ;; -xe) echo "journal tail"; exit 0 ;; esac
+    prev="$a"
+done
+awk -v rev="$rev" -v n="$n" 'BEGIN {
+    total = 6000
+    for (i = 1; i <= total; i++) {
+        e[i] = sprintf("2026-11-01T%02d:%02d:%02d+0000 host app[1]: entry-%04d", int(i / 3600), int(i / 60) % 60, i % 60, i)
+        if (i == 5990) e[i] = e[i] "\n                                         continued-5990"
+    }
+    if (rev) { for (i = total; i >= 1 && (n == 0 || total - i < n); i--) print e[i] }
+    else     { for (i = 1; i <= total && (n == 0 || i <= n); i++) print e[i] }
+}'
+MOCKEOF
+chmod +x "${JMOCK}/journalctl"
+LR="${WORK}/logroot"
+mkdir -p "${LR}/var/log/apache2" "${LR}/var/log/nginx"
+head -c 2097152 /dev/zero > "${LR}/var/log/apache2/access.log"
+echo "nginx line" > "${LR}/var/log/nginx/access.log"
+echo "dnf5 line" > "${LR}/var/log/dnf5.log"
+JO="${WORK}/journal_out"; mkdir -p "${JO}/metadata"
+rc=0
+env -i PATH="${JMOCK}:${MINBIN}" LDIR_LOG_ROOT="${LR}" LDIR_MODE=fast LDIR_LOG_MAX_MB=1 \
+    LDIR_MODULE_LOG="${JO}/module.log" timeout 120 "${MINBIN}/bash" "${TOOLKIT}/modules/60_logs.sh" "${JO}" > "${JO}/stdout.txt" 2>&1 || rc=$?
+JP="${JO}/logs/journal_period.txt"
+check "60_logs (mock journal): exits 0 (got ${rc})" test "${rc}" -eq 0
+check "journal: the newest entry of the period is kept (finding 3)" grep -q 'entry-6000$' "${JP}"
+check_not "journal: the oldest entries are the ones left out" grep -q 'entry-0001$' "${JP}"
+check "journal: entries are in time order (the oldest kept entry comes first)" bash -c "grep -v '^#' '${JP}' | head -1 | grep -q 'entry-1001$'"
+check "journal: a multi-line entry stays in one piece" bash -c "grep -A1 'entry-5990$' '${JP}' | grep -q continued-5990"
+check "journal: the note says the oldest entries are missing" grep -q '^# PARTIAL RESULT: .*oldest' "${JP}"
+check_not "journal: the note does not point to logs/journal/ when no binary journal was collected" grep -q 'logs/journal/' "${JP}"
+check "web: nginx is collected although apache's newest file is over the cap (finding 5)" test -f "${JO}/logs/nginx/access.log"
+check "web: apache and nginx are separate groups" grep -qE '^web_apache +newest_over_cap ' "${JO}/logs/log_summary.txt"
+check "packages: dnf5.log (Fedora 41 and later) is collected (finding 9)" test -f "${JO}/logs/dnf5.log"
+
 echo "== command line =="
 COLLECT="${TOOLKIT}/ldir-collect.sh"
 check "--help exits 0" bash "${COLLECT}" --help
@@ -486,6 +745,8 @@ check "--log-days without a value is rejected" rejected_with "requires an argume
 check "--log-days '' is rejected" rejected_with "non-empty" --log-days "" "${WORK}/ld"
 check "LDIR_LOG_DAYS=7 is rejected" bash -c "out=\$(LDIR_LOG_DAYS=7 bash '${COLLECT}' '${WORK}/ld' 2>&1); [[ \$? -eq 1 && \"\${out}\" == *\"Invalid log period: '7'\"* ]]"
 check "--log-max-mb abc is rejected" rejected_with "Invalid log size cap: 'abc'" --log-max-mb abc "${WORK}/ld"
+check "--journal-max-mb abc is rejected" rejected_with "Invalid binary journal size cap: 'abc'" --journal-max-mb abc "${WORK}/ld"
+check "LDIR_USER_FILE_MAX_MB=x is rejected" bash -c "out=\$(LDIR_USER_FILE_MAX_MB=x bash '${COLLECT}' '${WORK}/ld' 2>&1); [[ \$? -eq 1 && \"\${out}\" == *LDIR_USER_FILE_MAX_MB* ]]"
 check_not "a rejected value creates no directory" test -e "${WORK}/ld"
 check "--help documents --log-days" bash -c "bash '${COLLECT}' --help | grep -q -- '--log-days N'"
 if [[ "${EUID}" -ne 0 ]]; then

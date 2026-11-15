@@ -26,133 +26,82 @@ if [[ "${LDIR_ENABLE_WEB:-1}" != "1" ]]; then
     exit 0
 fi
 
-# ホームは passwd から（/root と /home/* 以外も対象）
+# ホームは passwd から（/root と /home/* 以外も対象）。
+# ホームの中はリンクをたどらずに写す（ldir_copy_user_files / ldir_copy_user_tree）。
+# たどらなかったリンク等は web/excluded_files.txt に残る。
+WEB_EXCLUDED="${WEB_DIR}/excluded_files.txt"
+
+# web_copy <ホーム> <ラベル> <プロファイルのディレクトリ> <コピー先> <ファイル名>...
+web_copy() {
+    local home="$1" user="$2" prof="$3" dst="$4" rel f
+    shift 4
+    local -a pairs=()
+    rel="${prof#"${home%/}/"}"
+    for f in "$@"; do pairs+=("${rel}/${f}" "${dst}/${f}"); done
+    ldir_copy_user_files "$home" "$user" "${WEB_EXCLUDED}" "${pairs[@]}"
+}
+
 while IFS=$'\t' read -r username user_home _; do
     if [[ -z "$user_home" || ! -d "$user_home" ]]; then
         continue
     fi
     log_debug "Checking browser data for user: ${username}"
-    
+
     # Firefox
     if [[ -d "${user_home}/.mozilla/firefox/" ]]; then
         log_info "  - Firefox profiles found"
         for profile in "${user_home}/.mozilla/firefox/"*.default* "${user_home}/.mozilla/firefox/"*release*; do
             if [[ -d "$profile" ]]; then
                 profile_name="$(basename "$profile")"
+                label="$(ldir_item_label "$username" "$profile")"
                 log_info "    - Profile: ${profile_name}"
-                
-                mkdir -p "${WEB_DIR}/firefox_${username}_${profile_name}"
-                
-                # 履歴・ブックマーク
-                safe_copy "${profile}/places.sqlite" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                safe_copy "${profile}/places.sqlite-wal" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                
-                # Cookie
-                safe_copy "${profile}/cookies.sqlite" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                
-                # ダウンロード履歴
-                safe_copy "${profile}/downloads.sqlite" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                
-                # フォーム履歴
-                safe_copy "${profile}/formhistory.sqlite" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                
-                # セッション情報
-                safe_copy "${profile}/sessionstore.jsonlz4" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                safe_copy "${profile}/sessionstore-backups/" "${WEB_DIR}/firefox_${username}_${profile_name}/sessionstore-backups/"
-                
+                d="${WEB_DIR}/firefox_${label}_${profile_name}"
+                mkdir -p "$d"
+                # 履歴・ブックマーク、Cookie、ダウンロード履歴、フォーム履歴、セッション、
                 # パスワード（暗号化されている）
-                safe_copy "${profile}/logins.json" "${WEB_DIR}/firefox_${username}_${profile_name}/"
-                safe_copy "${profile}/key4.db" "${WEB_DIR}/firefox_${username}_${profile_name}/"
+                web_copy "$user_home" "$username" "$profile" "$d" \
+                    places.sqlite places.sqlite-wal cookies.sqlite downloads.sqlite formhistory.sqlite \
+                    sessionstore.jsonlz4 logins.json key4.db
+                ldir_copy_user_tree "$user_home" "$username" "${WEB_EXCLUDED}" \
+                    "${profile#"${user_home%/}/"}/sessionstore-backups" "${d}/sessionstore-backups"
             fi
         done
     fi
-    
-    # Google Chrome
-    if [[ -d "${user_home}/.config/google-chrome/" ]]; then
-        log_info "  - Chrome profiles found"
-        for profile in "${user_home}/.config/google-chrome/Default" "${user_home}/.config/google-chrome/Profile"*; do
+
+    # Google Chrome / Chromium / Brave / Edge（同じ形式のプロファイル）
+    for browser in google-chrome:chrome chromium:chromium BraveSoftware/Brave-Browser:brave microsoft-edge:edge; do
+        bdir="${browser%%:*}"; bname="${browser##*:}"
+        [[ -d "${user_home}/.config/${bdir}/" ]] || continue
+        log_info "  - ${bname} profiles found"
+        for profile in "${user_home}/.config/${bdir}/Default" "${user_home}/.config/${bdir}/Profile"*; do
             if [[ -d "$profile" ]]; then
                 profile_name="$(basename "$profile")"
+                label="$(ldir_item_label "$username" "$profile")"
                 log_info "    - Profile: ${profile_name}"
-                
-                mkdir -p "${WEB_DIR}/chrome_${username}_${profile_name}"
-                
-                # 履歴
-                safe_copy "${profile}/History" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                safe_copy "${profile}/History-journal" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # Cookie
-                safe_copy "${profile}/Cookies" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                safe_copy "${profile}/Cookies-journal" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # ログインデータ（暗号化）
-                safe_copy "${profile}/Login Data" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # ブックマーク
-                safe_copy "${profile}/Bookmarks" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # トップサイト
-                safe_copy "${profile}/Top Sites" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # Web Data（フォーム履歴等）
-                safe_copy "${profile}/Web Data" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                
-                # セッション
-                safe_copy "${profile}/Current Session" "${WEB_DIR}/chrome_${username}_${profile_name}/"
-                safe_copy "${profile}/Last Session" "${WEB_DIR}/chrome_${username}_${profile_name}/"
+                d="${WEB_DIR}/${bname}_${label}_${profile_name}"
+                mkdir -p "$d"
+                case "${bname}" in
+                    chrome)
+                        # 履歴、Cookie、ログインデータ（暗号化）、ブックマーク、トップサイト、
+                        # Web Data（フォーム履歴等）、セッション
+                        web_copy "$user_home" "$username" "$profile" "$d" \
+                            History History-journal Cookies Cookies-journal "Login Data" Bookmarks \
+                            "Top Sites" "Web Data" "Current Session" "Last Session" ;;
+                    chromium)
+                        web_copy "$user_home" "$username" "$profile" "$d" History Cookies "Login Data" Bookmarks ;;
+                    *)
+                        web_copy "$user_home" "$username" "$profile" "$d" History Cookies ;;
+                esac
             fi
         done
-    fi
-    
-    # Chromium
-    if [[ -d "${user_home}/.config/chromium/" ]]; then
-        log_info "  - Chromium profiles found"
-        for profile in "${user_home}/.config/chromium/Default" "${user_home}/.config/chromium/Profile"*; do
-            if [[ -d "$profile" ]]; then
-                profile_name="$(basename "$profile")"
-                
-                mkdir -p "${WEB_DIR}/chromium_${username}_${profile_name}"
-                
-                safe_copy "${profile}/History" "${WEB_DIR}/chromium_${username}_${profile_name}/"
-                safe_copy "${profile}/Cookies" "${WEB_DIR}/chromium_${username}_${profile_name}/"
-                safe_copy "${profile}/Login Data" "${WEB_DIR}/chromium_${username}_${profile_name}/"
-                safe_copy "${profile}/Bookmarks" "${WEB_DIR}/chromium_${username}_${profile_name}/"
-            fi
-        done
-    fi
-    
+    done
+
     # Opera
     if [[ -d "${user_home}/.config/opera/" ]]; then
         log_info "  - Opera profile found"
-        mkdir -p "${WEB_DIR}/opera_${username}"
-        safe_copy "${user_home}/.config/opera/History" "${WEB_DIR}/opera_${username}/"
-        safe_copy "${user_home}/.config/opera/Cookies" "${WEB_DIR}/opera_${username}/"
-    fi
-    
-    # Brave
-    if [[ -d "${user_home}/.config/BraveSoftware/Brave-Browser/" ]]; then
-        log_info "  - Brave profile found"
-        for profile in "${user_home}/.config/BraveSoftware/Brave-Browser/Default" "${user_home}/.config/BraveSoftware/Brave-Browser/Profile"*; do
-            if [[ -d "$profile" ]]; then
-                profile_name="$(basename "$profile")"
-                mkdir -p "${WEB_DIR}/brave_${username}_${profile_name}"
-                safe_copy "${profile}/History" "${WEB_DIR}/brave_${username}_${profile_name}/"
-                safe_copy "${profile}/Cookies" "${WEB_DIR}/brave_${username}_${profile_name}/"
-            fi
-        done
-    fi
-    
-    # Edge
-    if [[ -d "${user_home}/.config/microsoft-edge/" ]]; then
-        log_info "  - Edge profile found"
-        for profile in "${user_home}/.config/microsoft-edge/Default" "${user_home}/.config/microsoft-edge/Profile"*; do
-            if [[ -d "$profile" ]]; then
-                profile_name="$(basename "$profile")"
-                mkdir -p "${WEB_DIR}/edge_${username}_${profile_name}"
-                safe_copy "${profile}/History" "${WEB_DIR}/edge_${username}_${profile_name}/"
-                safe_copy "${profile}/Cookies" "${WEB_DIR}/edge_${username}_${profile_name}/"
-            fi
-        done
+        label="$(ldir_item_label "$username" "${user_home%/}/.config/opera")"
+        mkdir -p "${WEB_DIR}/opera_${label}"
+        web_copy "$user_home" "$username" "${user_home%/}/.config/opera" "${WEB_DIR}/opera_${label}" History Cookies
     fi
 
 done < <(ldir_user_homes)

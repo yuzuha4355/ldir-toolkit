@@ -99,6 +99,14 @@ capture_redacted() {
     return 1
 }
 
+# 前後の空白を取り除く（virsh の --name / --uuid の出力。版によって後ろに空白が詰まる）
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    s="${s%"${s##*[![:space:]]}"}"
+    printf '%s' "$s"
+}
+
 # ファイル名に使える形にする（スナップショット名等）
 safe_name() {
     local n="${1//[^A-Za-z0-9._-]/_}"
@@ -347,6 +355,7 @@ if have_cmd virsh || [[ -d "${R}/etc/libvirt" ]] || proc_running libvirtd virtqe
             : > "${L_DIR}/disk_images.txt"
             # 名前に空白を含み得るので 1 行ずつ読む（fd 3: 中のコマンドに標準入力を取られないように）
             while IFS= read -r u <&3; do
+                u="$(trim "$u")"
                 [[ -n "$u" ]] || continue
                 budget_ok "libvirt domain ${u}" || continue
                 dd="${L_DIR}/domains/${u}"
@@ -373,6 +382,7 @@ if have_cmd virsh || [[ -d "${R}/etc/libvirt" ]] || proc_running libvirtd virtqe
                     done >> "${L_DIR}/disk_images.txt"
             done 3< <(run_limited "$T" virsh list --all --uuid 2>/dev/null)
             while IFS= read -r n <&3; do
+                n="$(trim "$n")"
                 [[ -n "$n" ]] || continue
                 budget_ok "libvirt network ${n}" || continue
                 capture_redacted "${L_DIR}/networks/$(safe_name "$n").xml" virsh net-dumpxml "$n"
@@ -380,11 +390,22 @@ if have_cmd virsh || [[ -d "${R}/etc/libvirt" ]] || proc_running libvirtd virtqe
                 capture_try "${L_DIR}/networks/$(safe_name "$n").dhcp_leases.txt" run_limited "$T" virsh net-dhcp-leases "$n"
             done 3< <(run_limited "$T" virsh net-list --all --name 2>/dev/null)
             while IFS= read -r p <&3; do
+                # libvirt 9.0 は --name の出力でも名前の後ろに空白を詰める（そのままでは
+                # "Storage pool not found" になる。検証レポートの指摘 8）
+                p="$(trim "$p")"
                 [[ -n "$p" ]] || continue
                 budget_ok "libvirt storage pool ${p}" || continue
                 capture_redacted "${L_DIR}/storage_pools/$(safe_name "$p").xml" virsh pool-dumpxml "$p"
-                # 停止中のプールでは失敗する（想定内）
-                capture_try "${L_DIR}/storage_pools/$(safe_name "$p").volumes.txt" run_limited "$T" virsh vol-list "$p" --details
+                # 停止中のプールでは失敗する（想定内）。稼働中のプールで失敗したら WARN
+                vf="${L_DIR}/storage_pools/$(safe_name "$p").volumes.txt"
+                if ! capture_try "$vf" run_limited "$T" virsh vol-list "$p" --details; then
+                    if run_limited "$T" virsh pool-info "$p" 2>/dev/null | grep -qiE '^State:[[:space:]]+running'; then
+                        log_warn "[35_virtualization] virsh vol-list failed for the running storage pool ${p} (see virtualization/host/libvirt/storage_pools/${vf##*/})"
+                    else
+                        echo "# pool ${p} is not running; its volumes cannot be listed" >> "$vf"
+                        log_debug "[35_virtualization] storage pool ${p} is not running; vol-list skipped"
+                    fi
+                fi
             done 3< <(run_limited "$T" virsh pool-list --all --name 2>/dev/null)
         else
             log_warn "[35_virtualization] libvirt socket exists (${SOCK}) but virsh did not answer; VM list not collected"
@@ -524,17 +545,21 @@ if have_cmd VBoxManage; then
 fi
 # ユーザーごとの VM 登録（VirtualBox の VM はユーザーごと。root の VBoxManage からは見えない）
 if [[ -z "${R}" ]]; then
+    # ホームの中はリンクをたどらずに写す（v0.4.0 の copy_config_file はリンクをたどり、
+    # ~/.VirtualBox/VirtualBox.xml -> /root/... で読めないはずのファイルを写せた）
     while IFS=$'\t' read -r username user_home _; do
         [[ -n "$user_home" ]] || continue
-        for x in "${user_home}/.config/VirtualBox/VirtualBox.xml" "${user_home}/.VirtualBox/VirtualBox.xml"; do
-            [[ -f "$x" ]] || continue
-            HOST_FOUND=1
-            copy_config_file "$x" "${VB_DIR}/user_${username}/VirtualBox.xml" "${EXCLUDED}"
+        for x in .config/VirtualBox/VirtualBox.xml .VirtualBox/VirtualBox.xml; do
+            [[ -e "${user_home%/}/${x}" || -L "${user_home%/}/${x}" ]] && HOST_FOUND=1
         done
-        if [[ -d "${user_home}/VirtualBox VMs" ]]; then
+        ldir_copy_user_files "$user_home" "$username" "${EXCLUDED}" \
+            .config/VirtualBox/VirtualBox.xml "${VB_DIR}/user_{label}/VirtualBox.xml" \
+            .VirtualBox/VirtualBox.xml "${VB_DIR}/user_{label}/legacy_VirtualBox.xml"
+        if [[ -d "${user_home}/VirtualBox VMs" && ! -L "${user_home}/VirtualBox VMs" ]]; then
             HOST_FOUND=1
-            ensure_dir "${VB_DIR}/user_${username}"
-            find "${user_home}/VirtualBox VMs" -maxdepth 2 "${LDIR_FIND_LS[@]}" > "${VB_DIR}/user_${username}/vm_files.txt" 2>/dev/null
+            label="$(ldir_item_label "$username" "${user_home%/}/VirtualBox VMs")"
+            ensure_dir "${VB_DIR}/user_${label}"
+            find "${user_home}/VirtualBox VMs" -maxdepth 2 "${LDIR_FIND_LS[@]}" > "${VB_DIR}/user_${label}/vm_files.txt" 2>/dev/null
         fi
     done < <(ldir_user_homes)
 fi

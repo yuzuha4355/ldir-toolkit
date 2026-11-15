@@ -2,7 +2,7 @@
 
 Linux forensic data collection tool for incident response.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](https://github.com/yuzuha4355/ldir-toolkit/releases)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
 
@@ -65,9 +65,10 @@ sudo ./ldir-collect.sh --log-days 90 --archive /mnt/usb/evidence
 |---|---|---|
 | Period (`--log-days`) | 30 days (60 or 90 on request) | all (unless `--log-days` is given) |
 | Size cap per log group (`--log-max-mb`) | 100 MB | none (unless given) |
+| Size cap for the binary journal (`--journal-max-mb`) | 256 MB | none (unless given) |
 
 The period applies to the journal and to log files, rotated and compressed ones included (copied as they are).
-When a log group (auth, syslog, web server, ...) exceeds the cap, the newest files are kept and the rest are listed in `logs/log_inventory.tsv` with a WARN.
+When a log group (auth, syslog, nginx, ...) exceeds the cap, the newest files are kept and the rest are listed in `logs/log_inventory.tsv` with a WARN. If the newest file alone is over the cap, nothing of that group is taken and the status says so (`newest_over_cap`).
 `logs/log_summary.txt` tells "no log of this kind on the host" (`not_present`) apart from "logs exist, none in the period" (`none_in_period`).
 
 ### Download
@@ -158,6 +159,15 @@ Per-user artifacts are collected for every home directory in the user database (
 With `--archive`, `[hostname]_[timestamp].tar.gz` and a `.sha256` file are written next to the directory.
 
 ---
+
+## What's New (v0.4.1)
+
+**Security fix for v0.4.0. Update from v0.4.0.**
+
+- In v0.4.0 a regular user could make the collector copy root's or the host's SSH private keys into the output, by placing a symbolic link in their own home (for example `~/.bash_history -> /root/.ssh/id_ed25519`). Files in users' home directories are now copied without following symbolic links, and are also checked for private key content. A link, FIFO or device that a user places in their home is recorded (with its target) instead of read, and a history file linked to `/dev/null` is reported as a WARN
+- Journal text exports keep the newest entries on every systemd version; log groups are per product; the binary journal has its own cap (`--journal-max-mb`, default 256 MB)
+- A full output device stops the remaining modules; the hash list of what was collected is still written and the exit status is 2
+- Environment variables in VM and container definitions, and Wi-Fi / VPN / WireGuard secrets in network configuration, are masked
 
 ## What's New (v0.4.0)
 
@@ -312,5 +322,5 @@ sudo make smoke   # real collection + integrity checks; run in a container or te
 
 ---
 
-**Version**: 0.4.0  
+**Version**: 0.4.1  
 **Maintainer**: [@yuzuha4355](https://github.com/yuzuha4355)

@@ -89,32 +89,27 @@ done
 
 # コマンド履歴
 # ホームは passwd から引く（/root と /home/* 以外にホームを持つサービスアカウントも対象）。
-# cp -a で更新日時を保つ（履歴ファイルの更新日時は最後の操作の時刻の手がかりになる）。
+# ホームの中は一般ユーザーが自由に作れるので、リンクをたどらずに通常ファイルだけを写す
+# （ldir_copy_user_files。cp -a で更新日時も保つ）。リンク・FIFO・デバイス・上限超え等は
+# execution/excluded_files.txt に残る。/dev/null へのリンク（痕跡消しの定番）は WARN。
 # bash / zsh は v0.3.2 までと同じ名前で残し、それ以外は user_history/<ユーザー>/ に置く。
 log_info "Collecting command history"
 HISTORY_FILES=(
     .ash_history .sh_history .history .ksh_history .zhistory
-    .local/share/fish/fish_history .config/fish/fish_history
     .python_history .mysql_history .psql_history .sqlite_history .rediscli_history
     .node_repl_history .irb_history .Rhistory .dbshell .mongo_dbshell
     .lesshst .viminfo .wget-hsts
+    .local/share/fish/fish_history .config/fish/fish_history
 )
 while IFS=$'\t' read -r username user_home _; do
     [[ -n "${user_home}" ]] || continue
-    if [[ -f "${user_home}/.bash_history" ]]; then
-        safe_copy "${user_home}/.bash_history" "${EXEC_DIR}/bash_history_${username}"
-    fi
-    if [[ -f "${user_home}/.zsh_history" ]]; then
-        safe_copy "${user_home}/.zsh_history" "${EXEC_DIR}/zsh_history_${username}"
-    fi
+    pairs=(.bash_history "${EXEC_DIR}/bash_history_{label}" .zsh_history "${EXEC_DIR}/zsh_history_{label}")
     for h in "${HISTORY_FILES[@]}"; do
-        [[ -e "${user_home}/${h}" ]] || continue
-        safe_copy "${user_home}/${h}" "${EXEC_DIR}/user_history/${username}/${h#.local/share/}"
+        pairs+=("$h" "${EXEC_DIR}/user_history/{label}/${h#.local/share/}")
     done
     # 最近使ったファイル（デスクトップ環境）
-    if [[ -f "${user_home}/.local/share/recently-used.xbel" ]]; then
-        safe_copy "${user_home}/.local/share/recently-used.xbel" "${EXEC_DIR}/recently_used_${username}.xbel"
-    fi
+    pairs+=(.local/share/recently-used.xbel "${EXEC_DIR}/recently_used_{label}.xbel")
+    ldir_copy_user_files "${user_home}" "${username}" "${EXEC_DIR}/excluded_files.txt" "${pairs[@]}"
 done < <(ldir_user_homes)
 
 # auditd のログと ausearch の抽出は 60_logs に移した（期間と容量の上限を揃えるため。

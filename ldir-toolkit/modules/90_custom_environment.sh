@@ -79,8 +79,14 @@ case "${PKG_MANAGER:-unknown}" in
         ;;
     dnf|yum)
         log_info "[${MODULE_NAME}] Collecting YUM/DNF package information..."
-        save_command_output "${PKG_MANAGER} list installed" "${MOD_DIR}/packages/installed_packages.txt"
-        save_command_output "${PKG_MANAGER} history" "${MOD_DIR}/packages/package_history.txt"
+        # dnf5（Fedora 41 以降）は "list installed" を受け付けない。"list --installed" は dnf4 も受け付ける
+        if [[ "${PKG_MANAGER}" = dnf ]]; then
+            save_command_output "dnf list --installed" "${MOD_DIR}/packages/installed_packages.txt"
+        else
+            save_command_output "yum list installed" "${MOD_DIR}/packages/installed_packages.txt"
+        fi
+        # dnf5（Fedora 41 以降）は "dnf history" だけでは失敗する。"history list" は dnf4 と yum でも使える
+        save_command_output "${PKG_MANAGER} history list" "${MOD_DIR}/packages/package_history.txt"
         ;;
     pacman)
         log_info "[${MODULE_NAME}] Collecting Pacman package information..."
@@ -184,16 +190,19 @@ CUSTOM_CONFIGS=(
     "/etc/opt"
 )
 
+# /opt/<アプリ> はアプリのユーザーの持ち物であることが多い（root 以外が中にリンクを置ける）。
+# リンクをたどらず、通常ファイルだけを写す。秘密鍵（中身・名前）は書かない。
+EXCLUDED_CUSTOM="${MOD_DIR}/excluded_files.txt"
 for pattern in "${CUSTOM_CONFIGS[@]}"; do
     for path in ${pattern}; do
-        if [[ -e "$path" ]]; then
+        if [[ -e "$path" || -L "$path" ]]; then
             # /opt/a/conf と /opt/b/conf が衝突しないよう、パス全体から名前を作る
             # 例: /opt/a/conf -> opt_a_conf
             flat="${path#/}"
-            if [[ -d "$path" ]]; then
-                safe_copy "${path%/}/" "${MOD_DIR}/custom_configs/${flat//\//_}/"
+            if [[ -d "$path" && ! -L "$path" ]]; then
+                ldir_copy_user_tree "${path%/*}" custom "${EXCLUDED_CUSTOM}" "${path##*/}" "${MOD_DIR}/custom_configs/${flat//\//_}"
             else
-                safe_copy "$path" "${MOD_DIR}/custom_configs/${flat//\//_}"
+                ldir_copy_user_files "${path%/*}" custom "${EXCLUDED_CUSTOM}" "${path##*/}" "${MOD_DIR}/custom_configs/${flat//\//_}"
             fi
         fi
     done
@@ -202,14 +211,16 @@ done
 # ユーザの ~/.config
 # ブラウザや Electron アプリのプロファイルを含み GB 単位になり得るうえ、
 # Cookie 等も入る（LDIR_ENABLE_WEB=0 の意図と矛盾する）。
-# - fast: 一覧だけ記録
-# - full: 丸ごと回収
+# - fast: 一覧だけ記録（find は起点のリンクをたどらない）
+# - full: 丸ごと回収。リンクはたどらない（~/.config -> /root で /root 全体が入った。v0.4.0 の指摘 1）
 while IFS=$'\t' read -r username user_home _; do
-    if [[ -n "$user_home" && -d "$user_home/.config" ]]; then
-        find "$user_home/.config" -maxdepth 3 "${LDIR_FIND_LS[@]}" > "${MOD_DIR}/custom_configs/user_config_${username}_listing.txt" 2>/dev/null || true
-        if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
-            safe_copy "$user_home/.config" "${MOD_DIR}/custom_configs/user_config_${username}"
-        fi
+    [[ -n "$user_home" ]] || continue
+    if [[ -d "$user_home/.config" ]]; then
+        label="$(ldir_item_label "$username" "${user_home%/}/.config")"
+        find "$user_home/.config" -maxdepth 3 "${LDIR_FIND_LS[@]}" > "${MOD_DIR}/custom_configs/user_config_${label}_listing.txt" 2>/dev/null || true
+    fi
+    if [[ "${LDIR_MODE:-fast}" = "full" ]]; then
+        ldir_copy_user_tree "$user_home" "$username" "${EXCLUDED_CUSTOM}" .config "${MOD_DIR}/custom_configs/user_config_{label}"
     fi
 done < <(ldir_user_homes)
 
