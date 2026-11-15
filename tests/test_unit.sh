@@ -580,7 +580,8 @@ check "Incus (mock): trusted certificates are listed" test -f "${IV}/certificate
 echo "== user homes: links, FIFOs and devices are not followed (findings 1, 2, 7) =="
 # 対象ホストの一般ユーザーは、自分のホームに何でも置ける。root で動く収集がそれをたどると、
 # 読めないはずのファイルが収集物に入り、FIFO で止まり、/dev/zero で出力先が埋まる。
-# モジュールは 60 秒とファイルサイズ 40 MB の上限を付けて動かす（直っていないと永久に止まる・埋まるため）
+# モジュールは 240 秒とファイルサイズ 40 MB の上限を付けて動かす（直っていないと永久に止まる・埋まるため）。
+# 50_persistence は /etc の LD_PRELOAD 検索だけで最大 60 秒使うので、実機では 60 秒を超え得る
 TR="${WORK}/trap"
 mkdir -p "${TR}/outside" "${TR}/home/bob/.ssh" "${TR}/home/bob/.config/autostart" "${TR}/home/bob/.VirtualBox" "${TR}/home/carol"
 printf -- '-----BEGIN OPENSSH PRIVATE KEY-----\ncanary-userkey\n-----END OPENSSH PRIVATE KEY-----\n' > "${TR}/outside/id_ed25519"
@@ -608,20 +609,20 @@ ln -s "${TR}/outside/root_only.txt" "${B}/.VirtualBox/VirtualBox.xml"
 ln -s "${TR}/outside" "${TR}/home/carol/.config"
 ln -s "${TR}/outside" "${TR}/home/carol/.ssh"
 TRAP_HOMES="bob${TAB}${B}${TAB}passwd${NL}carol${TAB}${TR}/home/carol${TAB}passwd"
-# run_mod <モジュール> <出力> [環境変数...]: 時間（60 秒）とファイルサイズ（40 MB）の上限付きで実行
+# run_mod <モジュール> <出力> [環境変数...]: 時間（240 秒）とファイルサイズ（40 MB）の上限付きで実行
 run_mod() {
     local mod="$1" out="$2"; shift 2
     mkdir -p "${out}/metadata"
     (
         ulimit -f 40960 2>/dev/null
         env LDIR_MODULE="${mod}" LDIR_MODULE_LOG="${out}/${mod%.sh}.log" "$@" \
-            timeout 60 bash "${TOOLKIT}/modules/${mod}" "${out}" > "${out}/${mod%.sh}.stdout" 2>&1
+            timeout 240 bash "${TOOLKIT}/modules/${mod}" "${out}" > "${out}/${mod%.sh}.stdout" 2>&1
     )
 }
 TO="${WORK}/trap_out"
 for mod in 15_execution.sh 35_virtualization.sh 40_auth.sh 50_persistence.sh; do
     rc=0; run_mod "${mod}" "${TO}" LDIR_USER_HOMES="${TRAP_HOMES}" LDIR_MODE=fast LDIR_USER_FILE_MAX_MB=1 || rc=$?
-    check "traps: ${mod} finishes and exits 0 (got ${rc}; 124 = stopped by the test's 60s limit)" test "${rc}" -eq 0
+    check "traps: ${mod} finishes and exits 0 (got ${rc}; 124 = stopped by the test's 240s limit)" test "${rc}" -eq 0
 done
 rc=0; run_mod 90_custom_environment.sh "${TO}" LDIR_USER_HOMES="${TRAP_HOMES}" LDIR_MODE=full || rc=$?
 check "traps: 90_custom_environment.sh (full mode) finishes and exits 0 (got ${rc})" test "${rc}" -eq 0
