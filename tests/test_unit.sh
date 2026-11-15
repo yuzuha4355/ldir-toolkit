@@ -629,8 +629,12 @@ check_not "traps: no private key content anywhere in the output" grep -rlE -- 'P
 check_not "traps: the target of a link to a key is nowhere in the output" grep -rqF canary-userkey "${TO}"
 check_not "traps: files reached through links are nowhere in the output" grep -rqF canary-rootonly "${TO}"
 check_not "traps: a PGP private key block in a history file is not copied" grep -rqF canary-pgp "${TO}"
-big="$(find "${TO}" -type f -size +1024k | head -3)"
+# ホームから写したものの置き場だけを見る（lsof_all.txt 等、ホストの状態の出力は実機では 1 MB を超える）
+big="$(find "${TO}/execution/user_history" "${TO}/config/user_ssh" "${TO}/persistence/shell_init" \
+    -type f -size +1024k 2>/dev/null | head -3)"
 check "traps: /dev/zero and the file over the size cap left no large file (${big:-none})" test -z "${big}"
+check_not "traps: nothing was written for the links to /dev/zero and the over-cap file" \
+    bash -c "find '${TO}' -name .lesshst -o -name .node_repl_history | grep -q ."
 check "traps: an ordinary history file is still copied" grep -qx "echo ldir-ok-history" "${TO}/execution/user_history/bob/.ash_history"
 check "traps: an ordinary authorized_keys is still copied" grep -q "bob@ok" "${TO}/config/user_ssh/bob/authorized_keys"
 check "traps: an ordinary shell init file is still copied" test -f "${TO}/persistence/shell_init/bob/.profile"
